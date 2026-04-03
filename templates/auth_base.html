@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}InformaX AI{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+</head>
+<body class="auth-page">
+  <div class="auth-shell">
+    <section class="auth-hero">
+      <div class="auth-brand">
+        <h1>Informa<span>X</span> AI</h1>
+        <p>Your <strong>Intelligent</strong> News Platform</p>
+      </div>
+
+      <div class="auth-visual">
+        <div class="auth-orb auth-orb-main"></div>
+        <div class="auth-orb auth-orb-secondary"></div>
+        <div class="auth-grid"></div>
+        <div class="auth-chip chip-news"><i class="fa-regular fa-newspaper"></i> News</div>
+        <div class="auth-chip chip-chart"><i class="fa-solid fa-chart-simple"></i></div>
+        <div class="auth-chip chip-ai"><i class="fa-solid fa-brain"></i></div>
+        <div class="auth-ring"></div>
+        <div class="auth-ring ring-two"></div>
+      </div>
+    </section>
+
+    <section class="auth-panel">
+      <div class="auth-card">
+        {% block auth_content %}{% endblock %}
+      </div>
+    </section>
+  </div>
+
+  <script>
+  document.addEventListener("DOMContentLoaded", () => {
+    document.querySelectorAll("[data-toggle-password]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const input = document.getElementById(btn.dataset.togglePassword);
+        if (!input) return;
+        const nextType = input.type === "password" ? "text" : "password";
+        input.type = nextType;
+        const icon = btn.querySelector("i");
+        if (icon) {
+          icon.className = nextType === "password" ? "fa-regular fa-eye" : "fa-regular fa-eye-slash";
+        }
+      });
+    });
+  });
+  </script>
+</body>
+</html>

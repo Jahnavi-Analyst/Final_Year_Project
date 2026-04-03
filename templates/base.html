@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>InformaX AI</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+</head>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  const input = document.getElementById("searchInput");
+  if (!input) return;
+
+  const words = ["Breaking News","Artificial Intelligence","Sensex Today","Gold Price","IPL 2026",
+    "Global Markets","Cyber Security","Climate Change","Startup Funding","World Politics",
+    "Bollywood News","World Cup"];
+
+  let wordIndex = 0;
+  let charIndex = 0;
+  let isDeleting = false;
+
+  function typeEffect() {
+    const currentWord = words[wordIndex];
+
+    if (isDeleting) charIndex--;
+    else charIndex++;
+
+    input.placeholder = "Search : " + currentWord.substring(0, charIndex);
+
+    if (!isDeleting && charIndex === currentWord.length) {
+      setTimeout(() => isDeleting = true, 1200);
+    } else if (isDeleting && charIndex === 0) {
+      isDeleting = false;
+      wordIndex = (wordIndex + 1) % words.length;
+    }
+
+    const speed = isDeleting ? 50 : 100;
+    setTimeout(typeEffect, speed);
+  }
+
+  typeEffect();
+});
+</script>
+
+<body>
+
+<div class="top-navbar">
+  <div class="nav-brand">
+    <h2>📰InformaX AI</h2>
+    <p>Intelligent News Analytics Platform</p>
+  </div>
+
+  <div class="nav-right">
+    <a href="{{ url_for('home', date=link_date) if link_date else url_for('home') }}">Home</a>
+
+    <form class="nav-filter-form" action="/set_filters" method="POST" style="display:flex; align-items:center; gap:8px;">
+      <input type="hidden" name="next" id="nextUrlCountry" value="/">
+
+      <select name="country" class="nav-select">
+        {% for label, cc in country_options %}
+          <option value="{{ cc }}" {% if selected_country == cc %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+
+      <div class="country-filter-wrap">
+        <button type="button" id="countrySearchBtn" class="country-icon-btn" title="Search any country">
+          <i class="fa-solid fa-magnifying-glass"></i>
+        </button>
+
+        <div id="countrySearchBox" class="country-search-box" style="display:none;">
+          <input type="text" name="country_text" id="countryTextInput"
+                 placeholder="Type country..." class="country-search-input">
+          <button type="submit" class="country-search-go">Go</button>
+        </div>
+      </div>
+
+      <input type="hidden" name="source" value="{{ selected_source }}">
+    </form>
+
+   <a href="/trusted-sources" style="
+  padding:8px 14px;
+  background:#1e3c72;
+  color:white;
+  border-radius:8px;
+  text-decoration:none;
+  font-weight:600;
+">
+  📰 Trusted Sources
+</a>
+
+    <a href="/saved">Saved</a>
+    {% if is_admin %}
+    <a href="/admin">Admin</a>
+    {% endif %}
+    <span class="profile">Hello, {{ current_user_name }}</span>
+    <a href="/logout" class="logout-link">Logout</a>
+  </div>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const btn = document.getElementById("countrySearchBtn");
+  const box = document.getElementById("countrySearchBox");
+  const input = document.getElementById("countryTextInput");
+
+  if(btn && box){
+    btn.addEventListener("click", () => {
+      const hidden = (box.style.display === "none" || box.style.display === "");
+      box.style.display = hidden ? "flex" : "none";
+      if(hidden && input) input.focus();
+    });
+  }
+});
+</script>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const current = window.location.pathname + window.location.search;
+  const a = document.getElementById("nextUrlCountry");
+  const b = document.getElementById("nextUrlSource");
+  if(a) a.value = current;
+  if(b) b.value = current;
+});
+</script>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const countryForm = document.querySelector(".nav-filter-form");
+  const countryInput = document.getElementById("countryTextInput");
+  const countryBox = document.getElementById("countrySearchBox");
+  const countrySelect = document.querySelector('.nav-filter-form select[name="country"]');
+
+  document.querySelectorAll("a[href]").forEach((link) => {
+    link.addEventListener("click", () => {
+      sessionStorage.setItem("nav_intent", "1");
+    });
+  });
+
+  document.querySelectorAll("form").forEach((form) => {
+    form.addEventListener("submit", () => {
+      sessionStorage.setItem("nav_intent", "1");
+    });
+  });
+
+  if (countryInput && countryForm) {
+    countryInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        sessionStorage.setItem("nav_intent", "1");
+      }
+    });
+  }
+
+  if (countrySelect && countryForm) {
+    countrySelect.addEventListener("change", () => {
+      if (countryInput) {
+        countryInput.value = "";
+      }
+      sessionStorage.setItem("nav_intent", "1");
+      countryForm.submit();
+    });
+  }
+
+  if (countryInput && countryBox) {
+    countryInput.addEventListener("input", () => {
+      if (countryInput.value.trim() && countrySelect) {
+        countrySelect.value = "WORLD";
+      }
+    });
+  }
+});
+</script>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  try {
+    const navEntry = performance.getEntriesByType("navigation")[0];
+    const isReload = navEntry && navEntry.type === "reload";
+    const path = window.location.pathname;
+    const hasNonDefaultFilters = {{ 'true' if selected_country != 'WORLD' or selected_source or selected_date else 'false' }};
+    const navIntent = sessionStorage.getItem("nav_intent");
+
+    if (navIntent) {
+      sessionStorage.removeItem("nav_intent");
+    }
+
+    if (!navIntent && isReload && (path.startsWith("/category/") || path.startsWith("/search") || (path === "/" && hasNonDefaultFilters))) {
+      window.location.replace("/?reset=1");
+    }
+  } catch (e) {
+    console.log("reload redirect skipped", e);
+  }
+});
+</script>
+
+<div class="page-wrapper">
+
+  <div class="sidebar">
+
+    <a href="{{ url_for('home', date=link_date) if link_date else url_for('home') }}"
+       class="menu-item {% if active=='home' %}main-active{% endif %}">
+      <span class="menu-line"></span>
+      <i class="fa-solid fa-house"></i>
+      Home
+    </a>
+
+    <div class="menu-item section-header">
+      <i class="fa-solid fa-tv"></i>
+      Top Stories
+    </div>
+
+    <a href="{{ url_for('category', cat='technology', date=link_date) if link_date else url_for('category', cat='technology') }}"
+       class="sub-item {% if active=='technology' %}main-active{% endif %}">
+      <i class="fa-solid fa-microchip"></i>
+      Technology
+    </a>
+
+    <a href="{{ url_for('category', cat='business', date=link_date) if link_date else url_for('category', cat='business') }}"
+       class="sub-item {% if active=='business' %}main-active{% endif %}">
+      <i class="fa-solid fa-briefcase"></i>
+      Business
+    </a>
+
+    <a href="{{ url_for('category', cat='health', date=link_date) if link_date else url_for('category', cat='health') }}"
+       class="sub-item {% if active=='health' %}main-active{% endif %}">
+      <i class="fa-solid fa-heart-pulse"></i>
+      Health
+    </a>
+
+    <a href="{{ url_for('category', cat='sports', date=link_date) if link_date else url_for('category', cat='sports') }}"
+       class="sub-item {% if active=='sports' %}main-active{% endif %}">
+      <i class="fa-solid fa-football"></i>
+      Sports
+    </a>
+
+    <a href="{{ url_for('category', cat='entertainment', date=link_date) if link_date else url_for('category', cat='entertainment') }}"
+       class="sub-item {% if active=='entertainment' %}main-active{% endif %}">
+      <i class="fa-solid fa-film"></i>
+      Entertainment
+    </a>
+
+    <a href="{{ url_for('category', cat='disaster', date=link_date) if link_date else url_for('category', cat='disaster') }}"
+       class="sub-item {% if active=='disaster' %}main-active{% endif %}">
+      <i class="fa-solid fa-triangle-exclamation"></i>
+      Accident / Disaster
+    </a>
+
+    <a href="{{ url_for('category', cat='climate', date=link_date) if link_date else url_for('category', cat='climate') }}"
+       class="sub-item {% if active=='climate' %}main-active{% endif %}">
+      <i class="fa-solid fa-leaf"></i>
+      Climate
+    </a>
+
+    <div class="sidebar-search">
+      <form action="/search" method="POST">
+        <input type="hidden" name="date" value="{{ selected_date }}">
+        <div class="search-wrapper">
+          <input type="text" id="searchInput" name="topic" placeholder="Type : AI" required>
+          <button type="submit" aria-label="Search">
+            <i class="fa-solid fa-magnifying-glass"></i>
+          </button>
+        </div>
+      </form>
+    </div>
+
+  </div>
+
+  <div class="main-content">
+    {% block content %}{% endblock %}
+  </div>
+
+</div>
+
+</body>
+</html>
+

@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="saved-page">
+  <h2>Saved Articles</h2>
+
+  {% if saved_rows|length == 0 %}
+    <p style="color:#1e3c72;">No saved articles yet. Click the ❤️ on any news.</p>
+  {% endif %}
+
+  {% for row in saved_rows %}
+    <div class="saved-card">
+      <h3>{{ row["title"] }}</h3>
+
+      <div class="saved-meta">
+        <b>Status:</b>
+        {% if row["label"] == "Real" %}
+          <span class="badge real">REAL</span>
+        {% elif row["label"] == "Fake" %}
+          <span class="badge fake">FAKE</span>
+        {% else %}
+          <span class="badge warn">CHECK</span>
+        {% endif %}
+        &nbsp; | &nbsp;
+        <b>Saved:</b> {{ row["saved_at"] }}
+      </div>
+
+      <a href="{{ row['link'] }}" target="_blank" class="read-more-btn">Read Full Article</a>
+
+      <form action="/remove_saved/{{ row['id'] }}" method="POST" style="display:inline-block; margin-left:10px;">
+        <button type="submit" class="remove-btn">Remove</button>
+      </form>
+    </div>
+  {% endfor %}
+</div>
+
+{% endblock %}

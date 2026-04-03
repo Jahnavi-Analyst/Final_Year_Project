@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<div class="card" style="margin-top:20px; padding:22px;">
+  <h2 style="color:#0f2d5c; margin:0;">Trusted News Sources</h2>
+  <p style="color:#274472; margin:8px 0 0;">Click a source to view its news.</p>
+
+  {% for category, sources in source_showcase.items() %}
+    <div style="margin-top:24px;">
+      <h3 style="color:#1e3c72; margin:0 0 12px;">{{ category }}</h3>
+
+      <div style="display:flex; gap:14px; flex-wrap:wrap;">
+        {% for s in sources %}
+          <div onclick="window.location.href='/source/{{ s.name | lower | replace(' ', '%20') }}'"
+               style="
+                  cursor:pointer;
+                  text-align:center;
+                  width:120px;
+                  padding:12px;
+                  border-radius:12px;
+                  border:1px solid #d9ecff;
+                  background:white;
+                  transition:0.25s;
+               "
+               onmouseover="this.style.transform='scale(1.05)'"
+               onmouseout="this.style.transform='scale(1)'">
+
+            {% if s.logo %}
+              <img src="{{ s.logo }}"
+                   onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"
+                   style="width:90px; height:90px; object-fit:contain; border-radius:12px;">
+            {% endif %}
+
+            <div style="
+                width:90px;
+                height:90px;
+                margin:0 auto;
+                display:{% if s.logo %}none{% else %}flex{% endif %};
+                align-items:center;
+                justify-content:center;
+                border-radius:16px;
+                background:linear-gradient(135deg,#0ea5ff,#4f46e5);
+                color:white;
+                font-size:24px;
+                font-weight:800;
+                letter-spacing:1px;
+                box-shadow:0 10px 20px rgba(59,130,246,0.18);
+            ">{{ s.badge }}</div>
+
+            <div style="font-size:13px; margin-top:8px; font-weight:600; color:#0f2d5c; text-transform:capitalize;">
+              {{ s.name }}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+  {% endfor %}
+</div>
+
+{% endblock %}

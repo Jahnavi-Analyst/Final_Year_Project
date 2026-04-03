@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:20px; flex-wrap:wrap;">
+  <div>
+    <h1 style="margin:0; font-size:38px; color:#0f2d5c;">Admin Control Center</h1>
+    <p style="margin:6px 0 0; color:#2a5298; font-weight:600;">User accounts, activity history, and password reset monitoring</p>
+  </div>
+</div>
+
+<div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:16px; margin-top:18px;">
+  <div class="card"><div style="font-size:13px;color:#5d6e8f;">Total Users</div><div style="font-size:30px;font-weight:800;color:#0f2d5c;">{{ admin_stats.total_users }}</div></div>
+  <div class="card"><div style="font-size:13px;color:#5d6e8f;">Admin Accounts</div><div style="font-size:30px;font-weight:800;color:#0f2d5c;">{{ admin_stats.admins }}</div></div>
+  <div class="card"><div style="font-size:13px;color:#5d6e8f;">Recent Logins</div><div style="font-size:30px;font-weight:800;color:#0f2d5c;">{{ admin_stats.recent_logins }}</div></div>
+  <div class="card"><div style="font-size:13px;color:#5d6e8f;">Password Resets</div><div style="font-size:30px;font-weight:800;color:#0f2d5c;">{{ admin_stats.password_resets }}</div></div>
+</div>
+
+<div style="display:grid; grid-template-columns:1.05fr 0.95fr; gap:18px; margin-top:18px; align-items:start;">
+  <div class="card">
+    <h3 style="margin-top:0; color:#0f2d5c;">Registered Users</h3>
+    <div style="overflow:auto;">
+      <table style="width:100%; border-collapse:collapse;">
+        <thead>
+          <tr style="text-align:left; border-bottom:1px solid #d9ecff; color:#274472;">
+            <th style="padding:10px 8px;">Name</th>
+            <th style="padding:10px 8px;">Email</th>
+            <th style="padding:10px 8px;">Created</th>
+            <th style="padding:10px 8px;">Last Login</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for user in users %}
+          <tr style="border-bottom:1px solid #eef5ff;">
+            <td style="padding:10px 8px;">{{ user.name }}</td>
+            <td style="padding:10px 8px;">{{ user.email }}</td>
+            <td style="padding:10px 8px;">{{ user.created_at or "Unknown" }}</td>
+            <td style="padding:10px 8px;">{{ user.last_login_at or "Not yet" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div style="display:grid; gap:18px;">
+    <div class="card">
+      <h3 style="margin-top:0; color:#0f2d5c;">Password Reset Requests</h3>
+      <div style="display:grid; gap:10px; max-height:380px; overflow:auto;">
+        {% for otp in otp_rows %}
+          <div style="border:1px solid #d9ecff; border-radius:12px; padding:12px;">
+            <div style="font-weight:700; color:#0f2d5c;">{{ otp.email }}</div>
+            <div style="color:#5d6e8f; font-size:13px; margin-top:4px;">Requested: {{ otp.created_at }}</div>
+            <div style="color:#5d6e8f; font-size:13px;">Expires: {{ otp.expires_at }}</div>
+            <div style="margin-top:6px; font-size:12px; font-weight:700; color:#2a5298;">{{ "Used" if otp.used else "Pending" }}</div>
+          </div>
+        {% else %}
+          <div style="color:#5d6e8f;">No password reset requests yet.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card" style="margin-top:18px;">
+  <h3 style="margin-top:0; color:#0f2d5c;">Recent Activity</h3>
+  <div style="overflow:auto; max-height:420px;">
+    <table style="width:100%; border-collapse:collapse;">
+      <thead>
+        <tr style="text-align:left; border-bottom:1px solid #d9ecff; color:#274472;">
+          <th style="padding:10px 8px;">Time</th>
+          <th style="padding:10px 8px;">User</th>
+          <th style="padding:10px 8px;">Event</th>
+          <th style="padding:10px 8px;">Details</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in activity_rows %}
+        <tr style="border-bottom:1px solid #eef5ff;">
+          <td style="padding:10px 8px;">{{ row.created_at }}</td>
+          <td style="padding:10px 8px;">{{ row.user_name or "Unknown" }}<br><span style="font-size:12px;color:#6c7b99;">{{ row.user_email or "" }}</span></td>
+          <td style="padding:10px 8px; font-weight:700; color:#0f2d5c;">{{ row.event_type }}</td>
+          <td style="padding:10px 8px;">{{ row.details }}</td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="4" style="padding:12px; color:#5d6e8f;">No recent activity available.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endblock %}

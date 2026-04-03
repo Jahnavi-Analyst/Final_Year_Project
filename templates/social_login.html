@@ -1,0 +1,41 @@
+{% extends "auth_base.html" %}
+
+{% block title %}{{ provider_title }} Sign In | InformaX AI{% endblock %}
+
+{% block auth_content %}
+<div class="auth-head">
+  <h2>{{ provider_title }}</h2>
+  <p>quick access for your account</p>
+  <span class="auth-head-line"></span>
+</div>
+
+{% if page_error %}
+  <div class="auth-message auth-error">{{ page_error }}</div>
+{% endif %}
+
+<form method="POST" action="/social-login/{{ provider }}" class="auth-form" autocomplete="off">
+  <label class="auth-field">
+    <i class="fa-regular fa-user"></i>
+    <input type="text" name="name" placeholder="Full Name (only for new account)" value="{{ prefill_name }}" autocomplete="off">
+  </label>
+
+  <label class="auth-field">
+    <i class="fa-regular fa-envelope"></i>
+    <input type="email" name="email" placeholder="{{ provider_title }} Email Address" value="{{ prefill_email }}" autocomplete="off" autocapitalize="off" spellcheck="false" required>
+  </label>
+
+  <button type="submit" class="auth-submit">
+    <i class="fa-brands fa-{{ provider_icon }}"></i>
+    <span>Continue with {{ provider_title }}</span>
+  </button>
+</form>
+
+<p class="auth-footer-text">
+  Existing account: just enter your email and continue.
+</p>
+
+<p class="auth-footer-text">
+  Want normal login instead?
+  <a href="/login" class="auth-link strong-link">Back to Login</a>
+</p>
+{% endblock %}

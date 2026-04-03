@@ -1,0 +1,53 @@
+{% extends "auth_base.html" %}
+
+{% block title %}Sign Up | InformaX AI{% endblock %}
+
+{% block auth_content %}
+<div class="auth-head">
+  <h2>Create Account</h2>
+  <p>start your intelligent news journey</p>
+  <span class="auth-head-line"></span>
+</div>
+
+{% if page_error %}
+  <div class="auth-message auth-error">{{ page_error }}</div>
+{% endif %}
+
+<form method="POST" action="/signup" class="auth-form" autocomplete="off">
+  <label class="auth-field">
+    <i class="fa-regular fa-user"></i>
+    <input type="text" name="name" placeholder="Full Name" value="{{ prefill_name }}" autocomplete="off" required>
+  </label>
+
+  <label class="auth-field">
+    <i class="fa-regular fa-envelope"></i>
+    <input type="email" name="email" placeholder="Email Address" value="{{ prefill_email }}" autocomplete="off" autocapitalize="off" spellcheck="false" required>
+  </label>
+
+  <label class="auth-field">
+    <i class="fa-solid fa-lock"></i>
+    <input type="password" id="signupPassword" name="password" placeholder="Create Password" autocomplete="new-password" required>
+    <button type="button" class="password-toggle" data-toggle-password="signupPassword">
+      <i class="fa-regular fa-eye"></i>
+    </button>
+  </label>
+
+  <label class="auth-field">
+    <i class="fa-solid fa-shield-halved"></i>
+    <input type="password" id="signupConfirmPassword" name="confirm_password" placeholder="Confirm Password" autocomplete="new-password" required>
+    <button type="button" class="password-toggle" data-toggle-password="signupConfirmPassword">
+      <i class="fa-regular fa-eye"></i>
+    </button>
+  </label>
+
+  <button type="submit" class="auth-submit">
+    <span>Create Account</span>
+    <i class="fa-solid fa-arrow-right"></i>
+  </button>
+</form>
+
+<p class="auth-footer-text">
+  Already have an account?
+  <a href="/login" class="auth-link strong-link">Login</a>
+</p>
+{% endblock %}

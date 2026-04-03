@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: informax-ai
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn wsgi:app
+    envVars:
+      - key: NEWSAPI_KEY
+        sync: false
+      - key: FLASK_SECRET_KEY
+        sync: false
+      - key: APP_TIMEZONE
+        value: Asia/Kolkata
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: SMTP_SERVER
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM_EMAIL
+        sync: false

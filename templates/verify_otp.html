@@ -1,0 +1,56 @@
+{% extends "auth_base.html" %}
+
+{% block title %}Verify OTP | InformaX AI{% endblock %}
+
+{% block auth_content %}
+<div class="auth-head">
+  <h2>Verify OTP</h2>
+  <p>confirm your email and reset password</p>
+  <span class="auth-head-line"></span>
+</div>
+
+{% if page_error %}
+  <div class="auth-message auth-error">{{ page_error }}</div>
+{% endif %}
+{% if page_success %}
+  <div class="auth-message auth-success">{{ page_success }}</div>
+{% endif %}
+
+<form method="POST" action="/verify-reset-otp" class="auth-form" autocomplete="off">
+  <label class="auth-field">
+    <i class="fa-regular fa-envelope"></i>
+    <input type="email" name="email" placeholder="Registered Email" value="{{ prefill_email }}" autocomplete="off" autocapitalize="off" spellcheck="false" required>
+  </label>
+
+  <label class="auth-field">
+    <i class="fa-solid fa-key"></i>
+    <input type="text" name="otp_code" placeholder="Enter 6-digit OTP" maxlength="6" autocomplete="off" required>
+  </label>
+
+  <label class="auth-field">
+    <i class="fa-solid fa-lock"></i>
+    <input type="password" id="otpNewPassword" name="new_password" placeholder="New Password" autocomplete="new-password" required>
+    <button type="button" class="password-toggle" data-toggle-password="otpNewPassword">
+      <i class="fa-regular fa-eye"></i>
+    </button>
+  </label>
+
+  <label class="auth-field">
+    <i class="fa-solid fa-shield-halved"></i>
+    <input type="password" id="otpConfirmPassword" name="confirm_password" placeholder="Confirm New Password" autocomplete="new-password" required>
+    <button type="button" class="password-toggle" data-toggle-password="otpConfirmPassword">
+      <i class="fa-regular fa-eye"></i>
+    </button>
+  </label>
+
+  <button type="submit" class="auth-submit">
+    <span>Reset Password</span>
+    <i class="fa-solid fa-arrow-right"></i>
+  </button>
+</form>
+
+<p class="auth-footer-text">
+  Need a new OTP?
+  <a href="/forgot-password" class="auth-link strong-link">Request Again</a>
+</p>
+{% endblock %}

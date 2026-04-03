@@ -1,0 +1,765 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:20px;">
+  <div>
+    <h1 style="margin:0; font-size:38px; color:#0f2d5c;">Welcome Back, {{ current_user_name }}!</h1>
+    <p style="margin:6px 0 0; color:#2a5298; font-weight:600;">Your Personalized News Feed</p>
+  </div>
+
+  <div class="card date-card" style="margin:0;">
+    <h4 style="margin:0 0 8px; color:#0f2d5c;">Select Date</h4>
+
+    <form action="/set_date" method="POST" style="display:flex; align-items:center; gap:8px;">
+      <input type="hidden" name="next" id="nextUrlDate" value="/">
+      <input type="date" name="date" value="{{ selected_date }}" max="{{ max_date }}" />
+      <button type="submit" class="date-btn" aria-label="Pick date">
+        <i class="fa-regular fa-calendar"></i>
+      </button>
+    </form>
+
+    <div style="margin-top:8px; color:#274472;">{{ today_text }}</div>
+  </div>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const current = window.location.pathname + window.location.search;
+  const x = document.getElementById("nextUrlDate");
+  if (x) x.value = current;
+});
+</script>
+
+{% if error_msg %}
+  <p style="color:#1e3c72; background:#e6f4ff; padding:10px; border-radius:8px; margin-top:14px;">
+    {{ error_msg }}
+  </p>
+{% endif %}
+
+{% if breaking_alert %}
+<div id="breakingBox" class="card blink-breaking" 
+     style="position:relative; margin-top:14px; border:1px solid #ffd6d6; background:linear-gradient(90deg,#fff3f3,#fffaf4);">
+
+  <!-- ❌ CLOSE BUTTON -->
+  <button onclick="dismissBreaking()" class="close-btn">
+    <i class="fa-solid fa-xmark"></i>
+  </button>
+
+  <!-- HEADER ROW -->
+  <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap; padding-right:50px;">
+
+    <!-- LEFT CONTENT -->
+    <div>
+      <div style="font-size:18px; font-weight:800; color:#b42318;">
+        🚨 Breaking News Alert
+      </div>
+
+      <div style="margin-top:6px; color:#7a271a; font-weight:700;">
+        A topic is appearing in many latest news headlines:
+        <b>{{ breaking_alert.title }}</b>
+      </div>
+
+      <div style="margin-top:4px; color:#7a271a;">
+        This means many news websites are talking about the same topic right now.
+      </div>
+    </div>
+
+    <!-- RIGHT CHIP -->
+    <span class="chip"
+    style="
+      background:#ffe5e5;
+      border-color:#ffc5c5;
+      color:#b42318;
+      position:relative;
+      top:26px;
+      left:30px;
+    ">
+
+      {{ "Major Breaking News" if breaking_alert.level == "high" else "Trending News" }}
+    </span>
+
+  </div>
+
+  <!-- HEADLINES -->
+  {% if breaking_alert.headlines %}
+  <div class="breaking-headline-list">
+    {% for h in breaking_alert.headlines %}
+      <a href="{{ h.link }}" target="_blank" class="breaking-headline-link">
+        {{ h.title }}
+        <small>{{ h.published }} | {{ h.time_ago }}</small>
+      </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+</div>
+{% endif %}
+
+{% if smart_alert %}
+<div class="card" style="margin-top:14px; border:1px solid #d9ecff; background:linear-gradient(90deg,#f5fbff,#eef7ff);">
+  <div style="font-size:18px; font-weight:800; color:#0f2d5c;">🔥 {{ smart_alert.message }}</div>
+  <div style="margin-top:6px; color:#274472; font-weight:600;">
+    Frequency detected in {{ smart_alert.count }} recent headlines.
+  </div>
+</div>
+{% endif %}
+
+<!-- TOP 3 CARDS -->
+<div id="topHighlightsGrid" style="display:grid; grid-template-columns:repeat(3, 1fr); gap:16px; margin-top:18px;">
+  {% for a in highlights %}
+  <div class="card news-card top-highlight-card" style="border:1px solid #d9ecff;">
+
+    <div class="news-head-row">
+      {% if a.image %}
+      <img src="{{ a.image }}" alt="News image" class="news-thumb">
+      {% endif %}
+
+      <div class="news-head-text">
+        <h3 style="margin:0; color:#0f2d5c; font-size:16px;">{{ a.title }}</h3>
+
+        <div style="margin-top:8px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <span class="chip" style="font-size:11px;">{{ a.published_display }} | {{ a.time_ago }}</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="color:#2a5298; font-size:12px; font-weight:700; line-height:1.5; margin:12px 0;">
+      {{ a.ai_summary[:150] }}{% if a.ai_summary|length > 150 %}...{% endif %}
+    </div>
+
+    <div class="top-card-bottom-row">
+      <div class="top-card-buttons">
+        <a href="{{ a.link }}" target="_blank" class="read-more-btn"
+           onclick="trackArticleClick('{{ a.title|e }}', '{{ a.category|e }}', '{{ a.source_name|e }}')">Read More</a>
+
+        <button
+          type="button"
+          class="share-btn"
+          onclick="shareArticle('{{ a.title|e }}', '{{ a.link|e }}')"
+          aria-label="Share article">
+          <i class="fa-solid fa-share-nodes"></i> Share
+        </button>
+      </div>
+
+      <div class="top-card-badge">
+        {% if a.label == "Real" %}
+          <span class="badge real">REAL</span>
+        {% elif a.label == "Fake" %}
+          <span class="badge fake">FAKE</span>
+        {% else %}
+          <span class="badge warn">CHECK</span>
+        {% endif %}
+      </div>
+    </div>
+
+  </div>
+  {% endfor %}
+</div>
+
+{% if sentiment_trend %}
+<div class="card" style="margin-top:14px; border:1px solid #d9ecff;">
+  <h3 style="margin-top:0; color:#0f2d5c;">
+    Topic Mood Trend: <span style="color:#2a5298;">{{ topic_query }}</span>
+  </h3>
+
+  <p style="color:#274472; font-weight:600;">
+    This shows how news tone changed from last week to this week, and a simple estimate for next week.
+  </p>
+
+  <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-top:12px;">
+    <div style="background:#e8f6ff;padding:14px;border-radius:10px;text-align:center;">
+      <h4 style="margin:0;color:#0f2d5c;">Last Week</h4>
+      <p style="font-size:18px;font-weight:700;margin-top:6px;">{{ sentiment_trend.dominant[0] }}</p>
+    </div>
+
+    <div style="background:#f2f9ff;padding:14px;border-radius:10px;text-align:center;">
+      <h4 style="margin:0;color:#0f2d5c;">This Week</h4>
+      <p style="font-size:18px;font-weight:700;margin-top:6px;">{{ sentiment_trend.dominant[1] }}</p>
+    </div>
+
+    <div style="background:#eef4ff;padding:14px;border-radius:10px;text-align:center;">
+      <h4 style="margin:0;color:#0f2d5c;">Next Week (Estimate)</h4>
+      <p style="font-size:18px;font-weight:700;margin-top:6px;">{{ sentiment_trend.dominant[2] }}</p>
+      <small style="color:#555;">simple forecast</small>
+    </div>
+  </div>
+
+  <div style="height:180px;margin-top:18px;">
+    <canvas id="topicSentTrend"></canvas>
+  </div>
+
+  <p style="font-size:12px;color:#274472;margin-top:8px;">
+    Note: Forecast is an estimate based on recent sentiment change.
+  </p>
+</div>
+{% endif %}
+
+<div style="display:grid; grid-template-columns: 1.35fr 0.9fr; gap:18px; margin-top:16px; align-items:start;">
+  <div class="feed-scroll" id="mainArticlesFeed">
+    {% for a in articles %}
+    <div class="card news-card" style="border:1px solid #d9ecff; margin-bottom:14px;">
+      <div class="news-head-row">
+        {% if a.image %}
+        <img src="{{ a.image }}" alt="News image" class="news-thumb news-thumb-large">
+        {% endif %}
+
+        <div class="news-head-text">
+          <h3 style="margin:0; color:#0f2d5c;">{{ a.title }}</h3>
+
+          <div style="margin:8px 0 10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <span class="chip" style="font-size:11px;">{{ a.published_display }} | {{ a.time_ago }}</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin:0 0 12px; padding:10px 12px; border-radius:10px; background:#f7fbff; border:1px solid #d9ecff;">
+        <div style="color:#0f2d5c; font-weight:800; margin-bottom:4px;">AI Quick Summary</div>
+        <div style="color:#274472; font-size:13px; line-height:1.5;">
+          {{ a.ai_summary }}
+        </div>
+      </div>
+
+      <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <a href="{{ a.link }}" target="_blank" class="read-more-btn"
+           onclick="trackArticleClick('{{ a.title|e }}', '{{ a.category|e }}', '{{ a.source_name|e }}')">Read More</a>
+
+        <button
+          type="button"
+          class="share-btn"
+          onclick="shareArticle('{{ a.title|e }}', '{{ a.link|e }}')">
+          <i class="fa-solid fa-share-nodes"></i> Share
+        </button>
+
+        {% if a.label == "Real" %}
+          <span class="badge real">REAL</span>
+        {% elif a.label == "Fake" %}
+          <span class="badge fake">FAKE</span>
+        {% else %}
+          <span class="badge warn">CHECK</span>
+        {% endif %}
+
+        <span class="pill headline">Headline: {{ a.headline_sentiment }}</span>
+        <span class="pill public">Public: {{ a.public_sentiment }}</span>
+      </div>
+
+      <div style="margin-top:12px; padding:10px 12px; border-radius:10px; background:#fffaf3; border:1px solid #ffe2b8;">
+        <div style="color:#8b5e00; font-weight:800; margin-bottom:4px;">🧠 Why This Is {{ a.label|upper }}</div>
+        {% for reason in a.explanation_reasons %}
+          <div style="color:#6d5522; font-size:12px; line-height:1.5;">Reason: {{ reason }}</div>
+        {% endfor %}
+      </div>
+
+      <button class="save-btn {% if a.is_saved %}saved{% endif %}"
+        onclick="toggleSave(event, this, {{ loop.index0 }})"
+        type="button">
+        <i class="fa-solid fa-heart"></i>
+      </button>
+
+      <input type="hidden" id="t{{ loop.index0 }}" value="{{ a.title|e }}">
+      <input type="hidden" id="l{{ loop.index0 }}" value="{{ a.link|e }}">
+      <input type="hidden" id="lb{{ loop.index0 }}" value="{{ a.label }}">
+      <input type="hidden" id="sc{{ loop.index0 }}" value="{{ a.score }}">
+      <input type="hidden" id="cat{{ loop.index0 }}" value="{{ a.category|e }}">
+      <input type="hidden" id="src{{ loop.index0 }}" value="{{ a.source_name|e }}">
+    </div>
+    {% endfor %}
+  </div>
+
+  <div>
+    <div class="card" style="border:1px solid #d9ecff;">
+      <h3 style="margin-top:0; color:#0f2d5c;">Your Activity</h3>
+      <div class="quick-stats">
+        <div class="stat-row"><span>Reading Time:</span><span>{{ activity.reading_time or "-" }}</span></div>
+        <div class="stat-row"><span>Most Clicked Category:</span><span>{{ activity.most_clicked_category or "-" }}</span></div>
+      </div>
+      <div style="margin-top:10px; color:#1e3c72; font-weight:800;">Top Searched Topics:</div>
+      <div style="margin-top:8px;">
+        {% if activity.top_searched_topics %}
+          {% for tag in activity.top_searched_topics %}
+            <span class="chip">{{ tag }}</span>
+          {% endfor %}
+        {% else %}
+          <span style="color:#6c7b99; font-size:13px;">No activity yet</span>
+        {% endif %}
+      </div>
+      <div style="margin-top:12px; color:#1e3c72; font-weight:800;">Recommended For You:</div>
+      <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
+        {% if ai_recommendations %}
+          {% for rec in ai_recommendations[:6] %}
+            <span class="chip">{{ rec }}</span>
+          {% endfor %}
+        {% else %}
+          <span style="color:#6c7b99; font-size:13px;">Recommendations will appear after reading, searching, or saving news</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="card" style="border:1px solid #d9ecff; margin-top:14px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+        <div>
+          <h3 style="margin-top:0; margin-bottom:4px; color:#0f2d5c;">Headline Sentiment</h3>
+          <div style="color:#274472; font-size:12px; font-weight:600;">
+            Shows whether headlines sound positive, negative, or neutral.
+          </div>
+        </div>
+        <span class="chip" id="sentSummary">Loading...</span>
+      </div>
+
+      <div class="chart-box">
+        <canvas id="sentPie"></canvas>
+      </div>
+
+      <div style="margin-top:10px; color:#274472; font-size:12px; line-height:1.4;">
+        <b>Tip:</b> More <b>Negative</b> means the news is more about problems/conflicts. More <b>Positive</b> means good updates.
+      </div>
+    </div>
+
+    <div class="card" style="border:1px solid #d9ecff; margin-top:14px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+        <div>
+          <h3 style="margin-top:0; margin-bottom:4px; color:#0f2d5c;">Public Mood in News</h3>
+          <div style="color:#274472; font-size:12px; font-weight:600;">
+            Shows how article descriptions sound overall.
+          </div>
+        </div>
+        <span class="chip" id="trendSummary">Loading...</span>
+      </div>
+
+      <div class="chart-box">
+        <canvas id="trendBar"></canvas>
+      </div>
+
+      <div style="margin-top:10px; color:#274472; font-size:12px; line-height:1.4;">
+        <b>Tip:</b> If <b>Neutral</b> is high, it means most news is informational (not emotional).
+      </div>
+    </div>
+
+    <div class="card" style="border:1px solid #d9ecff; margin-top:14px;">
+      <h3 style="margin-top:0; color:#0f2d5c;">Bias Detection Overview</h3>
+      <div style="margin-top:4px; color:#274472; font-size:12px; font-weight:600;">
+        Counts how many articles sound positive, negative, neutral, or sensational.
+      </div>
+      <div class="quick-stats" style="margin-top:12px;">
+        <div class="stat-row"><span>Positive:</span><span>{{ bias_counts.positive }}</span></div>
+        <div class="stat-row"><span>Negative:</span><span>{{ bias_counts.negative }}</span></div>
+        <div class="stat-row"><span>Neutral:</span><span>{{ bias_counts.neutral }}</span></div>
+        <div class="stat-row"><span>Sensational:</span><span>{{ bias_counts.sensational }}</span></div>
+      </div>
+    </div>
+
+    <div class="card" style="border:1px solid #d9ecff; margin-top:14px;">
+      <h3 style="margin-top:0; color:#0f2d5c;">Latest Saved Articles</h3>
+      <div class="saved-mini" id="latestSavedBox">
+        {% if latest_saved|length == 0 %}
+          <div style="color:#1e3c72; font-weight:700;">No saved articles yet.</div>
+        {% else %}
+          {% for row in latest_saved %}
+            <a href="{{ row['link'] }}" target="_blank">{{ row["title"] }}</a>
+          {% endfor %}
+        {% endif %}
+      </div>
+    </div>
+
+    {% if source_comparison and topic_query %}
+    <div class="card" style="border:1px solid #d9ecff; margin-top:14px;">
+      <h3 style="margin-top:0; color:#0f2d5c;">📰 Source Comparison</h3>
+      <div style="color:#274472; font-size:12px; font-weight:700; margin-bottom:10px;">
+        Topic: {{ source_comparison.topic }}
+      </div>
+      <div class="quick-stats">
+        {% for row in source_comparison.rows %}
+          <div class="stat-row"><span>{{ row.source }}</span><span>{{ row.sentiment }}</span></div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="card" style="border:1px solid #d9ecff; margin-top:14px;">
+      <h3 style="margin-top:0; color:#0f2d5c;">Quick Stats</h3>
+      <p>Articles Read: <b>{{ quick_stats.articles_read }}</b></p>
+      <p>Real: <b>{{ quick_stats.real_count }}</b> | Fake: <b>{{ quick_stats.fake_count }}</b></p>
+      <p>Saved: <b>{{ quick_stats.saved_count }}</b></p>
+      <p>Avg Positive: <b>{{ quick_stats.avg_positive }}%</b></p>
+      <p>Auto Refresh: <b>{{ auto_refresh_seconds }} sec</b></p>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
+
+<script>
+function escJsText(value) {
+  return String(value || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/'/g, "\\'")
+    .replace(/"/g, '&quot;');
+}
+
+async function shareArticle(title, link) {
+  const shareData = {
+    title: title,
+    text: title,
+    url: link
+  };
+
+  try {
+    if (navigator.share) {
+      await navigator.share(shareData);
+    } else {
+      await navigator.clipboard.writeText(link);
+      alert("Article link copied. You can now share it anywhere.");
+    }
+  } catch (err) {
+    console.log("Share cancelled or failed", err);
+  }
+}
+
+async function toggleSave(ev, btn, idx){
+  if(ev){ ev.preventDefault(); ev.stopPropagation(); }
+
+  const title = document.getElementById("t"+idx).value;
+  const link  = document.getElementById("l"+idx).value;
+  const label = document.getElementById("lb"+idx).value;
+  const score = document.getElementById("sc"+idx).value;
+
+  const form = new FormData();
+  form.append("title", title);
+  form.append("link", link);
+  form.append("label", label);
+  form.append("score", score);
+
+  const res = await fetch("/toggle_save", { method:"POST", body: form });
+  let data;
+  try { data = await res.json(); }
+  catch(e){
+    alert("Save failed: server returned invalid response.");
+    return;
+  }
+
+  if(!res.ok || !data.ok){
+    alert("Save failed: " + (data.error || "Unknown error"));
+    return;
+  }
+
+  btn.classList.toggle("saved", !!data.saved);
+
+  try{
+    const r = await fetch("/latest_saved_json");
+    const j = await r.json();
+    if(j.ok){
+      const box = document.getElementById("latestSavedBox");
+      if(box){
+        if(!j.items || j.items.length === 0){
+          box.innerHTML = `<div style="color:#1e3c72; font-weight:700;">No saved articles yet.</div>`;
+        } else {
+          box.innerHTML = j.items.map(it =>
+            `<a href="${it.link}" target="_blank">${it.title}</a>`
+          ).join("");
+        }
+      }
+    }
+  } catch(e){
+    console.log("latestSaved update failed", e);
+  }
+}
+
+function renderFeedCard(a, idx){
+  const credibility =
+    a.label === "Real"
+      ? `<span class="badge real">REAL</span>`
+      : a.label === "Fake"
+        ? `<span class="badge fake">FAKE</span>`
+        : `<span class="badge warn">CHECK</span>`;
+
+  return `
+    <div class="card news-card" style="border:1px solid #d9ecff; margin-bottom:14px;">
+      <div class="news-head-text">
+        <h3 style="margin:0; color:#0f2d5c;">${a.title || "No title"}</h3>
+
+        <div style="margin:8px 0 10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <span class="chip" style="font-size:11px;">${a.published_display || "Published: Unknown"} | ${a.time_ago || "Recently"}</span>
+        </div>
+      </div>
+
+      <div style="margin:0 0 12px; padding:10px 12px; border-radius:10px; background:#f7fbff; border:1px solid #d9ecff;">
+        <div style="color:#0f2d5c; font-weight:800; margin-bottom:4px;">AI Quick Summary</div>
+        <div style="color:#274472; font-size:13px; line-height:1.5;">${a.ai_summary || "Summary not available."}</div>
+      </div>
+
+      <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <a href="${a.link}" target="_blank" class="read-more-btn"
+           onclick="trackArticleClick('${escJsText(a.title)}','${escJsText(a.category)}','${escJsText(a.source_name)}')">Read More</a>
+
+        <button
+          type="button"
+          class="share-btn"
+          onclick="shareArticle('${escJsText(a.title)}','${escJsText(a.link)}')">
+          <i class="fa-solid fa-share-nodes"></i> Share
+        </button>
+
+        ${credibility}
+        <span class="pill headline">Headline: ${a.headline_sentiment || "Neutral"}</span>
+        <span class="pill public">Public: ${a.public_sentiment || "Neutral"}</span>
+      </div>
+
+      <div style="margin-top:12px; padding:10px 12px; border-radius:10px; background:#fffaf3; border:1px solid #ffe2b8;">
+        <div style="color:#8b5e00; font-weight:800; margin-bottom:4px;">🧠 Why This Is ${(a.label || "Check").toUpperCase()}</div>
+        ${(a.explanation_reasons || []).map(reason => `<div style="color:#6d5522; font-size:12px; line-height:1.5;">Reason: ${reason}</div>`).join("")}
+      </div>
+    </div>
+  `;
+}
+
+async function trackArticleClick(title, category, source){
+  try{
+    const payload = new URLSearchParams();
+    payload.append("title", title || "");
+    payload.append("category", category || "");
+    payload.append("source", source || "");
+
+    if (navigator.sendBeacon) {
+      const blob = new Blob([payload.toString()], { type: "application/x-www-form-urlencoded;charset=UTF-8" });
+      navigator.sendBeacon("/track_article_click", blob);
+      return;
+    }
+
+    await fetch("/track_article_click", {
+      method:"POST",
+      body: payload,
+      headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+      keepalive: true
+    });
+  } catch(e){
+    console.log("click tracking skipped", e);
+  }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  Chart.register(ChartDataLabels);
+
+  const pieEl = document.getElementById("sentPie");
+  const barEl = document.getElementById("trendBar");
+
+  const posH = {{ headline_counts.pos }};
+  const negH = {{ headline_counts.neg }};
+  const neuH = {{ headline_counts.neu }};
+
+  const posP = {{ public_counts.pos }};
+  const negP = {{ public_counts.neg }};
+  const neuP = {{ public_counts.neu }};
+
+  const headlineTop = (posH >= negH && posH >= neuH) ? "Mostly Positive"
+                  : (negH >= posH && negH >= neuH) ? "Mostly Negative"
+                  : "Mostly Neutral";
+
+  const publicTop = (posP >= negP && posP >= neuP) ? "Mostly Positive"
+               : (negP >= posP && negP >= neuP) ? "Mostly Negative"
+               : "Mostly Neutral";
+
+  const sentChip = document.getElementById("sentSummary");
+  if(sentChip) sentChip.textContent = headlineTop;
+
+  const trendChip = document.getElementById("trendSummary");
+  if(trendChip) trendChip.textContent = publicTop;
+
+  if(pieEl){
+    new Chart(pieEl, {
+      type: "pie",
+      data: {
+        labels: ["Positive","Negative","Neutral"],
+        datasets: [{
+          data: [posH, negH, neuH],
+          backgroundColor: ["#36A2EB", "#FF6384", "#FFCE56"],
+          borderWidth: 2
+        }]
+      },
+      options: {
+        responsive:true,
+        maintainAspectRatio:false,
+        plugins:{
+          legend:{ position:"top" },
+          datalabels:{
+            formatter:(value, ctx)=>{
+              const total = ctx.dataset.data.reduce((a,b)=>a+b,0);
+              if(!total) return "";
+              return `${((value / total) * 100).toFixed(1)}%`;
+            },
+            color:"#ffffff",
+            font:{ weight:"bold", size:12 }
+          }
+        }
+      }
+    });
+  }
+
+  if(barEl){
+    new Chart(barEl, {
+      type: "bar",
+      data: {
+        labels: ["Positive","Negative","Neutral"],
+        datasets: [{
+          label: "Articles",
+          data: [posP, negP, neuP],
+          backgroundColor: ["#36A2EB", "#FF6384", "#FFCE56"],
+          borderColor: ["#2b8bc6", "#d94f72", "#d4a62d"],
+          borderWidth: 1
+        }]
+      },
+      options: {
+        responsive:true,
+        maintainAspectRatio:false,
+        scales:{ y:{ beginAtZero:true } },
+        plugins:{
+          legend:{ display:true },
+          datalabels:{
+            anchor:"center",
+            align:"center",
+            formatter:(value, ctx)=>{
+              const total = ctx.dataset.data.reduce((a,b)=>a+b,0);
+              if(!total) return "";
+              return `${((value / total) * 100).toFixed(1)}%`;
+            },
+            color:"#123b7a",
+            font:{ weight:"bold", size:12 }
+          }
+        }
+      }
+    });
+  }
+
+  const topicEl = document.getElementById("topicSentTrend");
+
+  {% if sentiment_trend %}
+  const labels = {{ sentiment_trend.labels | tojson }};
+  const positive = {{ sentiment_trend.pos | tojson }};
+  const negative = {{ sentiment_trend.neg | tojson }};
+  const neutral  = {{ sentiment_trend.neu | tojson }};
+
+  if(topicEl){
+    new Chart(topicEl,{
+      type:'bar',
+      data:{
+        labels:labels,
+        datasets:[
+          {
+            label:'Positive',
+            data:positive,
+            backgroundColor:'rgba(54, 162, 235, 0.75)',
+            borderColor:'rgba(54, 162, 235, 1)',
+            borderWidth:1
+          },
+          {
+            label:'Neutral',
+            data:neutral,
+            backgroundColor:'rgba(255, 206, 86, 0.75)',
+            borderColor:'rgba(255, 206, 86, 1)',
+            borderWidth:1
+          },
+          {
+            label:'Negative',
+            data:negative,
+            backgroundColor:'rgba(255, 99, 132, 0.75)',
+            borderColor:'rgba(255, 99, 132, 1)',
+            borderWidth:1
+          }
+        ]
+      },
+      options:{
+        responsive:true,
+        maintainAspectRatio:false,
+        plugins:{
+          legend:{position:'bottom'},
+          datalabels:{
+            anchor:'center',
+            align:'center',
+            formatter:(value, ctx)=>{
+              const total = ctx.chart.data.datasets.reduce((sum, ds)=>sum + (ds.data[ctx.dataIndex] || 0), 0);
+              if(!total || value === 0) return "";
+              return `${((value/total)*100).toFixed(0)}%`;
+            },
+            color:'#1e3c72',
+            font:{ weight:'bold', size:11 }
+          }
+        },
+        scales:{
+          x:{stacked:true},
+          y:{stacked:true,beginAtZero:true}
+        }
+      }
+    });
+  }
+  {% endif %}
+});
+
+document.addEventListener("DOMContentLoaded", () => {
+  const autoRefreshSeconds = {{ auto_refresh_seconds|default(60) }};
+  const feedBox = document.getElementById("mainArticlesFeed");
+  const topGrid = document.getElementById("topHighlightsGrid");
+
+  const path = window.location.pathname;
+  const params = new URLSearchParams(window.location.search);
+
+  let mode = "home";
+  let category = "";
+  let topic = "";
+
+  if (path.startsWith("/category/")) {
+    mode = "category";
+    category = path.split("/category/")[1] || "";
+  } else if (path.startsWith("/search")) {
+    mode = "search";
+    topic = params.get("topic") || "";
+  }
+
+  const selectedDateInput = document.querySelector('input[name="date"]');
+  const selectedDate = selectedDateInput ? selectedDateInput.value : "";
+
+  async function autoRefreshNews(){
+    try{
+      const q = new URLSearchParams({
+        mode: mode,
+        category: category,
+        topic: topic,
+        date: selectedDate
+      });
+
+      const res = await fetch("/refresh_news_json?" + q.toString());
+      const data = await res.json();
+      if(!data.ok) return;
+
+      if(topGrid && data.highlights){
+        topGrid.innerHTML = data.highlights.map(renderHighlightCard).join("");
+      }
+
+      if(feedBox && data.articles){
+        feedBox.innerHTML = data.articles.map((a, idx) => renderFeedCard(a, idx)).join("");
+      }
+    } catch(e){
+      console.log("auto refresh skipped", e);
+    }
+  }
+
+  setInterval(autoRefreshNews, autoRefreshSeconds * 1000);
+});
+
+document.addEventListener("DOMContentLoaded", () => {
+  const params = new URLSearchParams(window.location.search);
+  if (params.has("date")) {
+    window.history.replaceState({}, "", window.location.pathname + (window.location.pathname.includes("/search") ? window.location.search.replace(/([?&])date=[^&]*/,'').replace(/[?&]$/,'') : ""));
+  }
+});
+
+function dismissBreaking() {
+  const box = document.getElementById("breakingBox");
+  if (box) {
+    box.style.display = "none";
+  }
+
+  // optional: persist
+  fetch("/dismiss_breaking", { method: "POST" });
+}
+
+</script>
+{% endblock %}
+
