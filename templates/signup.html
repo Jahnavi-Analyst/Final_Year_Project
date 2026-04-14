@@ -12,6 +12,9 @@
 {% if page_error %}
   <div class="auth-message auth-error">{{ page_error }}</div>
 {% endif %}
+{% if page_success %}
+  <div class="auth-message auth-success">{{ page_success }}</div>
+{% endif %}
 
 <form method="POST" action="/signup" class="auth-form" autocomplete="off">
   <label class="auth-field">
@@ -39,6 +42,10 @@
       <i class="fa-regular fa-eye"></i>
     </button>
   </label>
+
+  <div class="auth-footer-text" style="margin-top:-4px; text-align:left;">
+    Password must be 8+ characters and include uppercase, lowercase, number, and symbol.
+  </div>
 
   <button type="submit" class="auth-submit">
     <span>Create Account</span>

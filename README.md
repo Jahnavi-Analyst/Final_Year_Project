@@ -1,31 +1,21 @@
 # InformaX AI
 
-InformaX AI is a Flask-based intelligent news analytics platform that fetches live news, filters it by date and source, and enriches it with AI-assisted summaries, credibility tags, sentiment analysis, and topic insights.
+InformaX AI is a Flask-based intelligent news analytics platform that combines live news collection, trusted-source browsing, exact-date filtering, AI-assisted summarization, credibility support labels, sentiment insights, user personalization, and admin analytics in one application.
 
-## Features
+It is designed as a final-year project, but it is also structured so it can be deployed online and used from anywhere through a public link.
 
-- Live news dashboard with category-based browsing
-- Exact-date news filtering using the calendar
-- Trusted-source newspaper pages with daily source-wise news
-- AI-generated quick summaries
-- Credibility labels: `REAL`, `FAKE`, `CHECK`
-- Headline sentiment and public mood analysis
-- Breaking-news detection and trending-topic extraction
-- Save and manage articles locally with SQLite
-- Secure login, signup, and logout
-- OTP-based forgot-password flow via email
-- Admin dashboard for users, activity, and reset requests
+## Highlights
 
-## Tech Stack
-
-- Python
-- Flask
-- SQLite
-- Scikit-learn
-- TextBlob
-- VADER Sentiment
-- Feedparser
-- NewsAPI
+- live news dashboard with date filtering
+- trusted-source browsing
+- AI quick summaries
+- `REAL`, `FAKE`, and `CHECK` credibility support labels with simple reasons
+- headline sentiment and public mood insights
+- signup, login, OTP-based password reset, profile, and settings
+- saved articles and reading/activity tracking
+- admin dashboard with analytics, alerts, and system health
+- responsive layout for desktop and mobile
+- dark mode and system theme support
 
 ## Project Structure
 
@@ -33,85 +23,262 @@ InformaX AI is a Flask-based intelligent news analytics platform that fetches li
 InformaxAI/
 |- app.py
 |- db.py
-|- train_model.py
 |- requirements.txt
-|- .env.example
+|- Procfile
+|- render.yaml
+|- wsgi.py
+|- .env
+|- README.md
 |- dataset/
 |- model/
 |- static/
+|  |- css/
+|  |- js/
+|  `- images/
 `- templates/
 ```
 
-## Setup
+## Tech Stack
 
-1. Create and activate a virtual environment.
-2. Install dependencies:
+### Backend
+
+- Python
+- Flask
+- SQLite
+
+### AI / NLP / ML
+
+- Scikit-learn
+- TextBlob
+- VADER Sentiment
+
+### News / Parsing
+
+- NewsAPI
+- RSS feeds
+- BeautifulSoup
+
+### Frontend
+
+- HTML
+- CSS
+- JavaScript
+
+## Main Features
+
+### User Features
+
+- home dashboard with latest news
+- exact-date filtering for older news
+- category browsing
+- trusted-source pages
+- AI-generated quick summaries
+- credibility support with reasons
+- sentiment and mood indicators
+- save and unsave articles per user
+- profile, settings, and password management
+
+### Admin Features
+
+- admin-only analytics dashboard
+- activity and engagement monitoring
+- top searches and reading-time insights
+- alert panel and system health overview
+- user dataset view
+
+## Local Setup
+
+### 1. Clone the repository
+
+```bash
+git clone <your-repository-url>
+cd InformaxAI
+```
+
+### 2. Create a virtual environment
+
+Windows:
+
+```bash
+python -m venv venv
+venv\Scripts\activate
+```
+
+### 3. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Create a `.env` file in the project root using `.env.example`.
-4. Add your NewsAPI key to the `.env` file.
+### 4. Create `.env`
 
-Example `.env`:
+Copy `.env.example` and fill in your real values.
+
+Example:
 
 ```env
-NEWSAPI_KEY=your_newsapi_key_here
+NEWSAPI_KEY=your_real_newsapi_key
 FLASK_SECRET_KEY=replace_with_a_secure_secret_key
 APP_TIMEZONE=Asia/Kolkata
-ADMIN_EMAIL=your_admin_email@example.com
+ADMIN_EMAIL=admin@example.com
 SMTP_SERVER=smtp.gmail.com
 SMTP_PORT=587
 SMTP_USERNAME=your_email@example.com
-SMTP_PASSWORD=your_app_password
+SMTP_PASSWORD=your_email_app_password
 SMTP_FROM_EMAIL=your_email@example.com
 ```
 
-## Run The App
+### 5. Run the app
 
 ```bash
 python app.py
 ```
 
-Open:
+Then open:
 
 ```text
 http://127.0.0.1:5000
 ```
 
-## Deployment
+## Important Files
 
-This project now includes:
+- `app.py`
+  Main Flask application with routes, news processing, credibility logic, sentiment logic, authentication, and admin dashboard logic.
+
+- `db.py`
+  SQLite helper functions for users, saved articles, OTP records, and activity logs.
+
+- `model/`
+  Contains the trained classifier and vectorizer used for credibility support.
+
+- `templates/`
+  HTML templates for dashboard, auth pages, saved page, source pages, profile, settings, and admin dashboard.
+
+- `static/css/style.css`
+  Main styling file, including responsive layout and dark mode support.
+
+- `render.yaml`
+  Render Blueprint config for deployment.
+
+- `Procfile`
+  Gunicorn start command for production hosting.
+
+## Deployment Readiness
+
+This project is ready to deploy for demo and showcase use.
+
+It now includes:
 
 - `wsgi.py`
 - `Procfile`
 - `render.yaml`
+- safe `.env.example` placeholders
+- Render-ready Gunicorn port binding
 
-You can deploy it on Render or another Python host after setting the required environment variables there.
+## Deploy on Render
 
-## Fake-News Classification Note
+### What users will open
 
-The `REAL / FAKE / CHECK` label is an AI-assisted credibility estimate based on a trained machine learning model plus source/content heuristics. It should be treated as a support feature, not absolute truth.
+After deployment, users will get a public link such as:
 
-## Main Files
+```text
+https://informax-ai.onrender.com
+```
 
-- `app.py`: main Flask app and all dashboard logic
-- `db.py`: saved-article database helpers
-- `train_model.py`: fake-news model training script
-- `templates/`: frontend HTML files
-- `static/`: CSS, JS, and images
-- `model/`: saved ML model files
+If that exact service name is already taken, Render will generate a similar `onrender.com` URL.
 
-## Submission Tip
+### Step-by-step Render deployment
 
-For mentor/demo presentation, explain that the project combines:
+1. Push this project to GitHub.
+2. Create a [Render](https://render.com/) account and log in.
+3. In Render, click `New` -> `Blueprint`.
+4. Connect the GitHub repository that contains this project.
+5. Select the branch to deploy.
+6. Render will detect the root `render.yaml`.
+7. Fill the required environment variables:
+   - `NEWSAPI_KEY`
+   - `FLASK_SECRET_KEY`
+   - `ADMIN_EMAIL`
+   - `SMTP_SERVER`
+   - `SMTP_PORT`
+   - `SMTP_USERNAME`
+   - `SMTP_PASSWORD`
+   - `SMTP_FROM_EMAIL`
+8. Click `Deploy Blueprint`.
+9. Wait for the build and deploy to complete.
+10. Open the public Render URL and test the app.
 
-- real-time news collection
-- AI-assisted summarization
-- credibility estimation
-- sentiment analysis
-- trusted-source filtering
-- exact-date news retrieval
+### Recommended Render settings
 
-This makes it both a news aggregation system and an analytics platform.
+- for testing only: Free plan
+- for real users: Starter plan or higher
+
+### Important note about database storage
+
+This app currently uses SQLite through `db.py`, which stores data in `saved.db`.
+
+If you deploy without persistent storage:
+
+- saved users and activity data can be lost on redeploy or restart
+- free instances can sleep when idle
+
+For safer deployment on Render:
+
+1. use a `Starter` web service if possible
+2. add a Persistent Disk in Render
+3. later, consider moving to Postgres for full production use
+
+## Render Files Included
+
+### `render.yaml`
+
+Uses:
+
+- build command: `pip install -r requirements.txt`
+- start command: `gunicorn --bind 0.0.0.0:$PORT wsgi:app`
+
+### `Procfile`
+
+Uses:
+
+- `web: gunicorn --bind 0.0.0.0:$PORT wsgi:app`
+
+## Testing Checklist
+
+Before or after deployment, test these flows:
+
+- signup
+- login
+- remember me
+- forgot password OTP
+- update password
+- latest news loading
+- previous-date news loading
+- source pages opening correctly
+- credibility labels and reasons displaying correctly
+- save and unsave article
+- profile and settings pages
+- admin dashboard access
+- theme switching
+- dark mode visibility
+- mobile responsiveness
+
+## Known Notes
+
+- some original publisher pages may require login or subscription
+- the app does not bypass paywalls
+- summary quality depends on the available article text
+- `REAL`, `FAKE`, and `CHECK` are decision-support labels, not absolute truth guarantees
+- Render Free services can sleep after inactivity
+
+## Recommended Project / Viva Explanation
+
+You can explain the project like this:
+
+> InformaX AI is a real-time intelligent news analytics platform. It collects live news, allows filtering by date, category, and trusted source, and enriches each article with AI summaries, credibility support labels, and sentiment analysis. It also includes user personalization and an admin dashboard for analytics and monitoring.
+
+## Final Note
+
+For a college project, portfolio, or demo, this app is in a good state to deploy.
+
+For long-term public use, the next recommended improvement is moving from SQLite to a production database such as Postgres.

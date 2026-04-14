@@ -16,15 +16,15 @@
   <div class="auth-message auth-success">{{ page_success }}</div>
 {% endif %}
 
-<form method="POST" action="/login" class="auth-form" autocomplete="off">
+<form method="POST" action="/login" class="auth-form" autocomplete="on">
   <label class="auth-field">
     <i class="fa-regular fa-envelope"></i>
-    <input type="email" name="email" placeholder="Email Address" value="{{ prefill_email }}" autocomplete="off" autocapitalize="off" spellcheck="false" required>
+    <input type="email" name="email" placeholder="Email Address" value="{{ prefill_email }}" autocomplete="email" autocapitalize="off" spellcheck="false" required>
   </label>
 
   <label class="auth-field">
     <i class="fa-solid fa-lock"></i>
-    <input type="password" id="loginPassword" name="password" placeholder="Password" autocomplete="new-password" required>
+    <input type="password" id="loginPassword" name="password" placeholder="Password" autocomplete="current-password" required>
     <button type="button" class="password-toggle" data-toggle-password="loginPassword">
       <i class="fa-regular fa-eye"></i>
     </button>
@@ -32,7 +32,7 @@
 
   <div class="auth-row">
     <label class="remember-check">
-      <input type="checkbox" name="remember_me" checked>
+      <input type="checkbox" name="remember_me" {% if remember_checked %}checked{% endif %}>
       <span>Remember Me</span>
     </label>
     <a href="/forgot-password" class="auth-link">Forgot Password?</a>
@@ -43,19 +43,6 @@
     <i class="fa-solid fa-arrow-right"></i>
   </button>
 </form>
-
-<div class="auth-divider"><span>or continue with</span></div>
-
-<div class="auth-socials">
-  <a href="/social-login/google" class="auth-social-btn" style="text-decoration:none;">
-    <i class="fa-brands fa-google"></i>
-    <span>Google</span>
-  </a>
-  <a href="/social-login/microsoft" class="auth-social-btn" style="text-decoration:none;">
-    <i class="fa-brands fa-microsoft"></i>
-    <span>Microsoft</span>
-  </a>
-</div>
 
 <p class="auth-footer-text">
   Don't have an account?

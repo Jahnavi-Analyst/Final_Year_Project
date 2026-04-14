@@ -2,10 +2,10 @@
 <html>
 <head>
   <title>InformaX AI</title>
+  <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
 </head>
 
 <script>
@@ -44,12 +44,17 @@ document.addEventListener("DOMContentLoaded", function () {
 });
 </script>
 
-<body>
+<body class="theme-{{ theme_preference }}{% if is_admin %} is-admin-user{% endif %}">
 
 <div class="top-navbar">
-  <div class="nav-brand">
-    <h2>📰InformaX AI</h2>
-    <p>Intelligent News Analytics Platform</p>
+  <div class="nav-left">
+    <button type="button" class="sidebar-toggle" id="sidebarToggle" aria-label="Open menu">
+      <i class="fa-solid fa-bars"></i>
+    </button>
+    <div class="nav-brand">
+      <h2>InformaX AI</h2>
+      <p>Intelligent News Analytics Platform</p>
+    </div>
   </div>
 
   <div class="nav-right">
@@ -79,7 +84,7 @@ document.addEventListener("DOMContentLoaded", function () {
       <input type="hidden" name="source" value="{{ selected_source }}">
     </form>
 
-   <a href="/trusted-sources" style="
+   <a href="{{ url_for('trusted_sources', date=link_date) if link_date else url_for('trusted_sources') }}" style="
   padding:8px 14px;
   background:#1e3c72;
   color:white;
@@ -92,10 +97,54 @@ document.addEventListener("DOMContentLoaded", function () {
 
     <a href="/saved">Saved</a>
     {% if is_admin %}
-    <a href="/admin">Admin</a>
+    <a href="/admin/back" style="
+      display:inline-flex;
+      align-items:center;
+      gap:7px;
+      padding:8px 14px;
+      background:#16294d;
+      color:#ffffff;
+      border-radius:10px;
+      text-decoration:none;
+      font-weight:700;
+      border:1px solid rgba(255,255,255,0.12);
+    ">
+      <i class="fa-solid fa-chart-line"></i>
+      Admin
+    </a>
     {% endif %}
-    <span class="profile">Hello, {{ current_user_name }}</span>
-    <a href="/logout" class="logout-link">Logout</a>
+    <details class="profile-menu">
+      <summary class="profile-trigger">
+        <span class="profile-avatar"><i class="fa-solid fa-user"></i></span>
+        <span class="profile-trigger-text">{{ current_user_name }}</span>
+        <i class="fa-solid fa-chevron-down"></i>
+      </summary>
+      <div class="profile-dropdown">
+        <div class="profile-name">{{ current_user_name }}</div>
+        <div class="profile-email">{{ current_user.email if current_user else "guest@informax.ai" }}</div>
+        {% if is_admin and admin_in_app_mode %}
+        <a href="/admin/back" class="profile-action-link">
+          <i class="fa-solid fa-chart-line"></i>
+          Admin Dashboard
+        </a>
+        {% endif %}
+        {% if not is_admin %}
+        <a href="/profile" class="profile-action-link">
+          <i class="fa-solid fa-id-card"></i>
+          Profile
+        </a>
+        {% endif %}
+        <a href="/update-password" class="profile-action-link">
+          <i class="fa-solid fa-key"></i>
+          Update / Reset Password
+        </a>
+        <a href="/logout" class="profile-action-link danger-link">
+          <i class="fa-solid fa-right-from-bracket"></i>
+          Logout
+        </a>
+      </div>
+    </details>
+    </div>
   </div>
 </div>
 
@@ -194,9 +243,88 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 </script>
 
-<div class="page-wrapper">
+{% if is_logged_in and current_user %}
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const userId = "{{ current_user['id'] }}";
+  const todayKey = "{{ local_today_iso }}";
+  const storageKey = `informax_reading_${userId}_${todayKey}`;
+  const startedAt = Date.now();
+  let lastSentAt = startedAt;
+  let baseSeconds = parseInt(localStorage.getItem(storageKey) || "0", 10);
+  if (Number.isNaN(baseSeconds) || baseSeconds < 0) baseSeconds = 0;
 
-  <div class="sidebar">
+  window.__informaxReadingState = {
+    userId,
+    todayKey,
+    storageKey,
+    startedAt,
+    baseSeconds
+  };
+
+  const persistLiveTime = () => {
+    const liveSeconds = baseSeconds + Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    localStorage.setItem(storageKey, String(liveSeconds));
+    if (window.__informaxReadingState) {
+      window.__informaxReadingState.baseSeconds = baseSeconds;
+      window.__informaxReadingState.startedAt = startedAt;
+    }
+    return liveSeconds;
+  };
+
+  const sendReadingTime = (force = false) => {
+    const now = Date.now();
+    const seconds = Math.floor((now - lastSentAt) / 1000);
+    persistLiveTime();
+    if (!force && seconds < 30) return;
+    if (force && seconds < 5) return;
+
+    const payload = new URLSearchParams();
+    payload.append("seconds", String(seconds));
+
+    if (navigator.sendBeacon) {
+      const blob = new Blob([payload.toString()], { type: "application/x-www-form-urlencoded;charset=UTF-8" });
+      navigator.sendBeacon("/track_presence", blob);
+      lastSentAt = now;
+      return;
+    }
+
+    fetch("/track_presence", {
+      method: "POST",
+      body: payload,
+      headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+      keepalive: true
+    }).then(() => {
+      lastSentAt = now;
+    }).catch(() => {});
+  };
+
+  persistLiveTime();
+  setInterval(persistLiveTime, 10000);
+  setInterval(() => sendReadingTime(false), 30000);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      sendReadingTime(true);
+    } else {
+      persistLiveTime();
+    }
+  });
+  window.addEventListener("pagehide", () => sendReadingTime(true));
+  window.addEventListener("beforeunload", () => sendReadingTime(true));
+});
+</script>
+{% endif %}
+
+<div class="page-wrapper">
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+  <div class="sidebar" id="appSidebar">
+    <div class="sidebar-mobile-header">
+      <div class="sidebar-mobile-title">Menu</div>
+      <button type="button" class="sidebar-close" id="sidebarClose" aria-label="Close menu">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+    </div>
 
     <a href="{{ url_for('home', date=link_date) if link_date else url_for('home') }}"
        class="menu-item {% if active=='home' %}main-active{% endif %}">
@@ -264,6 +392,13 @@ document.addEventListener("DOMContentLoaded", () => {
       </form>
     </div>
 
+    <div class="sidebar-bottom-tools">
+      <a href="/settings" class="sub-item {% if active=='settings' %}main-active{% endif %}">
+        <i class="fa-solid fa-gear"></i>
+        Settings
+      </a>
+    </div>
+
   </div>
 
   <div class="main-content">
@@ -271,6 +406,69 @@ document.addEventListener("DOMContentLoaded", () => {
   </div>
 
 </div>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const sidebar = document.getElementById("appSidebar");
+  const overlay = document.getElementById("sidebarOverlay");
+  const toggle = document.getElementById("sidebarToggle");
+  const closeBtn = document.getElementById("sidebarClose");
+
+  const closeSidebar = () => document.body.classList.remove("sidebar-open");
+  const openSidebar = () => document.body.classList.add("sidebar-open");
+
+  if (toggle) toggle.addEventListener("click", openSidebar);
+  if (closeBtn) closeBtn.addEventListener("click", closeSidebar);
+  if (overlay) overlay.addEventListener("click", closeSidebar);
+
+  if (sidebar) {
+    sidebar.querySelectorAll("a").forEach((link) => {
+      link.addEventListener("click", () => {
+        closeSidebar();
+      });
+    });
+  }
+
+  window.addEventListener("resize", () => {
+    if (window.innerWidth > 1400) {
+      closeSidebar();
+    }
+  });
+
+  const readingTimeEl = document.getElementById("readingTimeValue");
+  if (!readingTimeEl) return;
+
+  const baseSeconds = parseInt(readingTimeEl.dataset.baseSeconds || "0", 10) || 0;
+  const userId = readingTimeEl.dataset.userId || "";
+  const activityDate = readingTimeEl.dataset.activityDate || "";
+  const storageKey = userId && activityDate ? `informax_reading_${userId}_${activityDate}` : "";
+
+  const formatReadingTime = (seconds) => {
+    if (seconds <= 0) return "<1m";
+    if (seconds < 60) return "<1m";
+    const totalMinutes = Math.floor(seconds / 60);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    return hours > 0 ? `${hours}h ${minutes}m` : `${totalMinutes}m`;
+  };
+
+  const updateReadingTimeDisplay = () => {
+    const storedSeconds = storageKey ? (parseInt(localStorage.getItem(storageKey) || "0", 10) || 0) : 0;
+    const state = window.__informaxReadingState;
+    let liveSeconds = Math.max(baseSeconds, storedSeconds);
+    if (state && state.storageKey === storageKey) {
+      liveSeconds = Math.max(
+        liveSeconds,
+        (state.baseSeconds || 0) + Math.max(0, Math.floor((Date.now() - state.startedAt) / 1000))
+      );
+    }
+    readingTimeEl.textContent = formatReadingTime(liveSeconds);
+  };
+
+  updateReadingTimeDisplay();
+  window.setInterval(updateReadingTimeDisplay, 1000);
+});
+</script>
 
 </body>
 </html>

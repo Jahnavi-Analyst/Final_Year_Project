@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card" style="margin-top:20px; padding:24px;">
+  <h2 style="margin:0; color:#0f2d5c;">Profile</h2>
+  <p style="margin:8px 0 0; color:#274472;">Your account details and personal activity summary.</p>
+
+  <div style="display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; margin-top:20px;">
+    <div class="card" style="background:#f8fbff;"><b>Name</b><div style="margin-top:8px;">{{ current_user.name }}</div></div>
+    <div class="card" style="background:#f8fbff;"><b>Email</b><div style="margin-top:8px; word-break:break-word;">{{ current_user.email }}</div></div>
+    <div class="card" style="background:#f8fbff;"><b>Account Created</b><div style="margin-top:8px;">{{ profile_stats.created_at }}</div></div>
+    <div class="card" style="background:#f8fbff;"><b>Last Login</b><div style="margin-top:8px;">{{ profile_stats.last_login_at }}</div></div>
+  </div>
+
+  <div style="display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; margin-top:16px;">
+    <div class="card" style="background:#f8fbff;"><b>Saved Articles</b><div style="margin-top:8px; font-size:28px; font-weight:800;">{{ profile_stats.saved_count }}</div></div>
+    <div class="card" style="background:#f8fbff;"><b>Search Count</b><div style="margin-top:8px; font-size:28px; font-weight:800;">{{ profile_stats.search_count }}</div></div>
+    <div class="card" style="background:#f8fbff;"><b>Reading Time</b><div style="margin-top:8px; font-size:28px; font-weight:800;">{{ profile_stats.reading_time }}</div></div>
+    <div class="card" style="background:#f8fbff;"><b>Favourite Category</b><div style="margin-top:8px;">{{ profile_stats.favorite_category }}</div></div>
+  </div>
+
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:16px;">
+    <div class="card" style="background:#f8fbff;">
+      <h3 style="margin-top:0; color:#123b7a;">Top Searched Topic</h3>
+      <p style="font-size:22px; font-weight:800; color:#0f2d5c;">{{ profile_stats.top_searched_topic }}</p>
+      <h4 style="color:#123b7a;">Most Searched</h4>
+      {% if profile_stats.most_searched %}
+        {% for item in profile_stats.most_searched %}
+          <span class="topic-pill" style="display:inline-flex; margin:4px;">{{ item.topic }} · {{ item.count }}</span>
+        {% endfor %}
+      {% else %}
+        <p style="color:#56729d;">No search activity yet.</p>
+      {% endif %}
+    </div>
+
+    <div class="card" style="background:#f8fbff;">
+      <h3 style="margin-top:0; color:#123b7a;">Everyday Reading Time</h3>
+      {% for item in profile_stats.daily_reading %}
+        <div style="display:flex; justify-content:space-between; border-bottom:1px solid #d9ecff; padding:8px 0;">
+          <b>{{ item.date }}</b>
+          <span>{{ item.time }}</span>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="card" style="background:#f8fbff; margin-top:16px;">
+    <h3 style="margin-top:0; color:#123b7a;">Recent Saved Articles</h3>
+    {% if profile_stats.recent_saved %}
+      {% for row in profile_stats.recent_saved %}
+        <div style="padding:10px 0; border-bottom:1px solid #d9ecff;">
+          <b>{{ row.title }}</b>
+          <div style="color:#56729d; margin-top:4px;">Saved: {{ row.saved_at }}</div>
+        </div>
+      {% endfor %}
+    {% else %}
+      <p style="color:#56729d;">No saved articles yet.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

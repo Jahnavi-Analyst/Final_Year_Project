@@ -1,12 +1,29 @@
-{% extends "base.html" %}
+﻿{% extends "base.html" %}
 
 {% block content %}
 
 <div class="card" style="margin-top:20px; padding:18px;">
   <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap;">
     <div>
+      <a href="{{ url_for('trusted_sources', date=selected_date) if selected_date else url_for('trusted_sources') }}" class="source-back-link"
+         style="
+            display:inline-flex;
+            align-items:center;
+            gap:8px;
+            margin-bottom:10px;
+            padding:8px 12px;
+            border-radius:10px;
+            background:#eef5ff;
+            color:#0f2d5c;
+            text-decoration:none;
+            font-weight:700;
+            font-size:13px;
+         ">
+        <i class="fa-solid fa-arrow-left"></i>
+        <span>Back To Trusted Sources</span>
+      </a>
       <h2 style="color:#0f2d5c; margin:0 0 10px;">
-        📰 News from {{ source_name }}
+        News from {{ source_name }}
       </h2>
       <div style="color:#274472; font-weight:600;">{{ today_text }}</div>
     </div>
@@ -14,7 +31,7 @@
     <div class="card date-card" style="margin:0; min-width:220px;">
       <h4 style="margin:0 0 8px; color:#0f2d5c;">Select Date</h4>
       <form action="/set_date" method="POST" style="display:flex; align-items:center; gap:8px;">
-        <input type="hidden" name="next" value="/source/{{ source_query }}">
+        <input type="hidden" name="next" value="/source/{{ source_query | replace(' ', '%20') }}">
         <input type="date" name="date" value="{{ selected_date }}" max="{{ max_date }}">
         <button type="submit" class="date-btn" aria-label="Pick date">
           <i class="fa-regular fa-calendar"></i>
@@ -30,16 +47,26 @@
   {% endif %}
 
   {% if articles %}
-    <div style="margin-top:16px; display:flex; flex-direction:column; gap:20px;">
+    <div style="
+        margin-top:16px;
+        max-height:calc(100vh - 260px);
+        overflow-y:auto;
+        padding-right:8px;
+        display:flex;
+        flex-direction:column;
+        gap:20px;
+    "
+    class="news-scroll"
+    >
       {% for a in articles %}
-      <div style="
+      <div class="source-article-card" style="
           border:1px solid #d9ecff;
           border-radius:14px;
           padding:16px;
           background:#ffffff;
           box-shadow:0 2px 6px rgba(0,0,0,0.04);
       ">
-        <h3 style="
+        <h3 class="source-article-title" style="
             margin:0;
             color:#0f2d5c;
             font-size:16px;
@@ -48,7 +75,7 @@
           {{ a.title }}
         </h3>
 
-        <div style="
+        <div class="source-article-meta" style="
             margin-top:6px;
             font-size:12px;
             color:#5b6b7c;
@@ -56,7 +83,7 @@
           {{ a.published_display }} | {{ a.time_ago }}
         </div>
 
-        <div style="
+        <div class="source-summary-box" style="
             margin-top:10px;
             background:#f4f8ff;
             padding:12px;
@@ -65,7 +92,8 @@
             color:#274472;
             line-height:1.5;
         ">
-          🤖 {{ a.ai_summary }}
+          <div class="source-summary-title" style="color:#0f2d5c; font-weight:800; margin-bottom:4px;">AI Quick Summary</div>
+          {{ a.ai_summary }}
         </div>
 
         <div style="
@@ -89,7 +117,10 @@
               Read More
             </a>
 
-            <button onclick="shareNews('{{ a.link }}')" style="
+            <button class="share-btn"
+                type="button"
+                onclick="shareNews(event, {{ (a.link or '') | tojson }})"
+                style="
                 background:#e9eef5;
                 border:none;
                 padding:6px 12px;
@@ -98,61 +129,126 @@
                 font-weight:600;
                 font-size:13px;
             ">
-              🔗 Share
+              Share
             </button>
           </div>
 
           <button type="button"
-            onclick='saveNews(
-              this,
-              {{ (a.title or "No title") | tojson }},
-              {{ (a.link or "#") | tojson }},
-              {{ (a.ai_summary or "") | tojson }},
-              {{ (a.label or "Real") | tojson }}
-            )'
-            style="background:none; border:none; cursor:pointer;">
-            <i class="fa-regular fa-heart heart-icon"></i>
+            class="save-article-btn {% if a.is_saved %}saved{% endif %}"
+            onclick="toggleTrustedSave(event, this, {{ loop.index0 }})"
+            aria-label="{% if a.is_saved %}Remove saved article{% else %}Save article{% endif %}"
+            aria-pressed="{% if a.is_saved %}true{% else %}false{% endif %}">
+            <i class="heart-icon {% if a.is_saved %}fa-solid liked{% else %}fa-regular{% endif %} fa-heart"></i>
           </button>
         </div>
+
+        <input type="hidden" id="ts_t{{ loop.index0 }}" value="{{ a.title|e }}">
+        <input type="hidden" id="ts_l{{ loop.index0 }}" value="{{ a.link|e }}">
+        <input type="hidden" id="ts_lb{{ loop.index0 }}" value="{{ (a.label or 'Real')|e }}">
       </div>
       {% endfor %}
     </div>
+  {% else %}
+    <p style="margin-top:20px; color:#5b6b7c; text-align:center;">No news articles found for this source and date.</p>
   {% endif %}
 
 </div>
 
+<style>
+.news-scroll::-webkit-scrollbar {
+    width: 8px;
+}
+.news-scroll::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 10px;
+}
+.news-scroll::-webkit-scrollbar-thumb {
+    background: #0ea5ff;
+    border-radius: 10px;
+}
+.news-scroll::-webkit-scrollbar-thumb:hover {
+    background: #0f2d5c;
+}
+</style>
+
 <script>
-function saveNews(btn, title, link, summary, label) {
-  fetch("/save_article", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      title: title,
-      link: link,
-      summary: summary,
-      label: label
-    })
-  })
-  .then(res => res.json())
-  .then(data => {
-    const icon = btn.querySelector("i");
-
-    if (data.status === "saved") {
-      icon.classList.remove("fa-regular");
-      icon.classList.add("fa-solid", "liked");
-    }
-
-    if (data.status === "removed") {
-      icon.classList.remove("fa-solid", "liked");
-      icon.classList.add("fa-regular");
-    }
-  })
-  .catch(err => console.log(err));
+function updateSavedHeart(btn, saved) {
+  const icon = btn.querySelector("i");
+  btn.classList.toggle("saved", !!saved);
+  btn.setAttribute("aria-pressed", saved ? "true" : "false");
+  btn.setAttribute("aria-label", saved ? "Remove saved article" : "Save article");
+  btn.dataset.saved = saved ? "1" : "0";
+  if (!icon) {
+    return;
+  }
+  if (saved) {
+    icon.classList.remove("fa-regular");
+    icon.classList.add("fa-solid", "liked");
+    icon.style.color = "#ff6b8a";
+  } else {
+    icon.classList.remove("fa-solid", "liked");
+    icon.classList.add("fa-regular");
+    icon.style.color = "";
+  }
 }
 
-function shareNews(link) {
+async function toggleTrustedSave(ev, btn, idx) {
+  if (ev) {
+    ev.preventDefault();
+    ev.stopPropagation();
+  }
+  const title = document.getElementById("ts_t" + idx)?.value || "";
+  const link = document.getElementById("ts_l" + idx)?.value || "";
+  const label = document.getElementById("ts_lb" + idx)?.value || "Real";
+
+  if (!link) {
+    alert("This article cannot be saved right now.");
+    return;
+  }
+  if (btn.classList.contains("is-saving")) {
+    return;
+  }
+
+  const form = new FormData();
+  form.append("title", title);
+  form.append("link", link);
+  form.append("label", label);
+  form.append("score", "0");
+
+  btn.classList.add("is-saving");
+
+  try {
+    const res = await fetch("/toggle_save", {
+      method: "POST",
+      credentials: "same-origin",
+      body: form
+    });
+
+    let data;
+    try {
+      data = await res.json();
+    } catch (error) {
+      throw new Error("Save failed: server returned invalid response.");
+    }
+
+    if (!res.ok || !data || !data.ok) {
+      throw new Error((data && data.error) ? data.error : "Unable to save article.");
+    }
+
+    updateSavedHeart(btn, !!data.saved);
+  } catch (error) {
+    console.log("saveNews failed", error);
+    alert(error.message || "Unable to save this article right now. Please try again.");
+  } finally {
+    btn.classList.remove("is-saving");
+  }
+}
+
+function shareNews(ev, link) {
+  if (ev) {
+    ev.preventDefault();
+    ev.stopPropagation();
+  }
   if (navigator.share) {
     navigator.share({
       title: "Check this news",
@@ -162,18 +258,11 @@ function shareNews(link) {
     .catch((error) => console.log("Share failed:", error));
   } else {
     navigator.clipboard.writeText(link)
-      .then(() => {
-        alert("Link copied! You can paste and share.");
-      })
-      .catch(() => {
-        alert("Copy failed. Please copy manually.");
-      });
+      .then(() => alert("Link copied!"))
+      .catch(() => alert("Copy failed."));
   }
 }
 
-setTimeout(function(){
-  window.location.reload();
-}, 60000);
 </script>
 
 {% endblock %}

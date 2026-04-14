@@ -27,30 +27,60 @@
     <input type="text" name="otp_code" placeholder="Enter 6-digit OTP" maxlength="6" autocomplete="off" required>
   </label>
 
-  <label class="auth-field">
-    <i class="fa-solid fa-lock"></i>
-    <input type="password" id="otpNewPassword" name="new_password" placeholder="New Password" autocomplete="new-password" required>
-    <button type="button" class="password-toggle" data-toggle-password="otpNewPassword">
-      <i class="fa-regular fa-eye"></i>
-    </button>
-  </label>
+  <div class="auth-footer-text" style="margin-top:-4px; text-align:left;">
+    Verify the OTP first. After successful verification, you can create a new password.
+  </div>
 
-  <label class="auth-field">
-    <i class="fa-solid fa-shield-halved"></i>
-    <input type="password" id="otpConfirmPassword" name="confirm_password" placeholder="Confirm New Password" autocomplete="new-password" required>
-    <button type="button" class="password-toggle" data-toggle-password="otpConfirmPassword">
-      <i class="fa-regular fa-eye"></i>
-    </button>
-  </label>
+  <div id="otpTimerBox" class="auth-footer-text" style="text-align:left;">
+    OTP expires in <span id="otpCountdown">{{ otp_expires_seconds or 0 }}</span>
+  </div>
 
   <button type="submit" class="auth-submit">
-    <span>Reset Password</span>
+    <span>Verify OTP</span>
     <i class="fa-solid fa-arrow-right"></i>
+  </button>
+</form>
+
+<form method="POST" action="/resend-reset-otp" id="resendOtpForm" style="display:none; margin-top:14px;">
+  <input type="hidden" name="email" value="{{ prefill_email }}">
+  <button type="submit" class="auth-submit">
+    <span>Resend OTP</span>
+    <i class="fa-solid fa-rotate-right"></i>
   </button>
 </form>
 
 <p class="auth-footer-text">
   Need a new OTP?
-  <a href="/forgot-password" class="auth-link strong-link">Request Again</a>
+  <a href="/forgot-password" class="auth-link strong-link">Change Email</a>
 </p>
+
+<script>
+(() => {
+  let seconds = Number("{{ otp_expires_seconds or 0 }}");
+  const countdownEl = document.getElementById("otpCountdown");
+  const timerBox = document.getElementById("otpTimerBox");
+  const resendForm = document.getElementById("resendOtpForm");
+  if (!countdownEl || !timerBox || !resendForm) return;
+  const formatCountdown = (value) => {
+    const safeValue = Math.max(0, Number(value) || 0);
+    const minutes = Math.floor(safeValue / 60);
+    const remainingSeconds = safeValue % 60;
+    if (minutes > 0) {
+      return `${minutes}m ${String(remainingSeconds).padStart(2, "0")}s`;
+    }
+    return `${remainingSeconds}s`;
+  };
+  const tick = () => {
+    if (seconds <= 0) {
+      timerBox.style.display = "none";
+      resendForm.style.display = "block";
+      return;
+    }
+    countdownEl.textContent = formatCountdown(seconds);
+    seconds -= 1;
+    window.setTimeout(tick, 1000);
+  };
+  tick();
+})();
+</script>
 {% endblock %}

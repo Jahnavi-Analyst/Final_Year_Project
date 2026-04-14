@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card" style="margin-top:20px; padding:22px;">
+  <h2 style="margin:0; color:#0f2d5c;">Help & Support</h2>
+  <p style="margin:8px 0 0; color:#274472;">Quick answers for common user questions and a direct support contact.</p>
+
+  <div class="card" style="margin-top:18px; background:#f8fbff;">
+    <h3 style="margin-top:0; color:#123b7a;">Contact Admin</h3>
+    <p style="color:#274472;">If you face account or article issues, email the admin at <b>{{ support_email }}</b>.</p>
+    <a href="mailto:{{ support_email }}?subject=InformaX%20AI%20Support" class="read-more-btn" style="text-decoration:none;">Email Support</a>
+  </div>
+
+  <div style="display:grid; gap:14px; margin-top:18px;">
+    {% for title, answer in help_items %}
+    <div class="card" style="background:#ffffff;">
+      <h3 style="margin-top:0; color:#123b7a;">{{ title }}</h3>
+      <p style="color:#274472;">{{ answer }}</p>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

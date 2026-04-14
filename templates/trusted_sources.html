@@ -1,28 +1,23 @@
-{% extends "base.html" %}
+﻿{% extends "base.html" %}
 
 {% block content %}
 
-<div class="card" style="margin-top:20px; padding:22px;">
-  <h2 style="color:#0f2d5c; margin:0;">Trusted News Sources</h2>
-  <p style="color:#274472; margin:8px 0 0;">Click a source to view its news.</p>
+<div class="card trusted-sources-page" style="margin-top:20px; padding:22px; max-height:calc(100vh - 170px); overflow-y:auto; overflow-x:hidden; padding-right:14px;">
+  <a href="{{ url_for('home', date=selected_date) if selected_date else url_for('home') }}" class="trusted-home-btn">
+    <i class="fa-solid fa-arrow-left"></i>
+    Go Back Home
+  </a>
+  <h2 class="trusted-page-title" style="margin:0;">Trusted News Sources</h2>
+  <p class="trusted-page-subtitle" style="margin:8px 0 0;">Click a source to view its news.</p>
 
   {% for category, sources in source_showcase.items() %}
     <div style="margin-top:24px;">
-      <h3 style="color:#1e3c72; margin:0 0 12px;">{{ category }}</h3>
+      <h3 class="trusted-category-title" style="margin:0 0 12px;">{{ category }}</h3>
 
       <div style="display:flex; gap:14px; flex-wrap:wrap;">
         {% for s in sources %}
-          <div onclick="window.location.href='/source/{{ s.name | lower | replace(' ', '%20') }}'"
-               style="
-                  cursor:pointer;
-                  text-align:center;
-                  width:120px;
-                  padding:12px;
-                  border-radius:12px;
-                  border:1px solid #d9ecff;
-                  background:white;
-                  transition:0.25s;
-               "
+          <div class="trusted-source-tile"
+               onclick="window.location.href='/source/{{ s.name | lower | replace(' ', '%20') }}{% if selected_date %}?date={{ selected_date }}{% endif %}'"
                onmouseover="this.style.transform='scale(1.05)'"
                onmouseout="this.style.transform='scale(1)'">
 
@@ -48,7 +43,7 @@
                 box-shadow:0 10px 20px rgba(59,130,246,0.18);
             ">{{ s.badge }}</div>
 
-            <div style="font-size:13px; margin-top:8px; font-weight:600; color:#0f2d5c; text-transform:capitalize;">
+            <div class="trusted-source-name">
               {{ s.name }}
             </div>
           </div>

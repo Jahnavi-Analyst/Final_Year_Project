@@ -3,7 +3,7 @@
 
 <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:20px;">
   <div>
-    <h1 style="margin:0; font-size:38px; color:#0f2d5c;">Welcome Back, {{ current_user_name }}!</h1>
+    <h1 style="margin:0; font-size:38px; color:#0f2d5c;">{{ welcome_prefix }}, {{ current_user_name }}!</h1>
     <p style="margin:6px 0 0; color:#2a5298; font-weight:600;">Your Personalized News Feed</p>
   </div>
 
@@ -110,10 +110,6 @@ document.addEventListener("DOMContentLoaded", () => {
   <div class="card news-card top-highlight-card" style="border:1px solid #d9ecff;">
 
     <div class="news-head-row">
-      {% if a.image %}
-      <img src="{{ a.image }}" alt="News image" class="news-thumb">
-      {% endif %}
-
       <div class="news-head-text">
         <h3 style="margin:0; color:#0f2d5c; font-size:16px;">{{ a.title }}</h3>
 
@@ -123,8 +119,8 @@ document.addEventListener("DOMContentLoaded", () => {
       </div>
     </div>
 
-    <div style="color:#2a5298; font-size:12px; font-weight:700; line-height:1.5; margin:12px 0;">
-      {{ a.ai_summary[:150] }}{% if a.ai_summary|length > 150 %}...{% endif %}
+    <div style="color:#2a5298; font-size:12px; font-weight:700; line-height:1.6; margin:12px 0;">
+      {{ a.ai_summary[:420] }}{% if a.ai_summary|length > 420 %}...{% endif %}
     </div>
 
     <div class="top-card-bottom-row">
@@ -199,10 +195,6 @@ document.addEventListener("DOMContentLoaded", () => {
     {% for a in articles %}
     <div class="card news-card" style="border:1px solid #d9ecff; margin-bottom:14px;">
       <div class="news-head-row">
-        {% if a.image %}
-        <img src="{{ a.image }}" alt="News image" class="news-thumb news-thumb-large">
-        {% endif %}
-
         <div class="news-head-text">
           <h3 style="margin:0; color:#0f2d5c;">{{ a.title }}</h3>
 
@@ -243,9 +235,9 @@ document.addEventListener("DOMContentLoaded", () => {
       </div>
 
       <div style="margin-top:12px; padding:10px 12px; border-radius:10px; background:#fffaf3; border:1px solid #ffe2b8;">
-        <div style="color:#8b5e00; font-weight:800; margin-bottom:4px;">🧠 Why This Is {{ a.label|upper }}</div>
+        <div style="color:#8b5e00; font-weight:800; margin-bottom:4px;">Why we marked this as {{ a.label|upper }}</div>
         {% for reason in a.explanation_reasons %}
-          <div style="color:#6d5522; font-size:12px; line-height:1.5;">Reason: {{ reason }}</div>
+          <div style="color:#6d5522; font-size:12px; line-height:1.5;">- {{ reason }}</div>
         {% endfor %}
       </div>
 
@@ -269,7 +261,7 @@ document.addEventListener("DOMContentLoaded", () => {
     <div class="card" style="border:1px solid #d9ecff;">
       <h3 style="margin-top:0; color:#0f2d5c;">Your Activity</h3>
       <div class="quick-stats">
-        <div class="stat-row"><span>Reading Time:</span><span>{{ activity.reading_time or "-" }}</span></div>
+        <div class="stat-row"><span>Reading Time:</span><span id="readingTimeValue" data-base-seconds="{{ activity.reading_seconds or 0 }}" data-user-id="{{ current_user['id'] if current_user else 0 }}" data-activity-date="{{ local_today_iso }}">{{ activity.reading_time or "-" }}</span></div>
         <div class="stat-row"><span>Most Clicked Category:</span><span>{{ activity.most_clicked_category or "-" }}</span></div>
       </div>
       <div style="margin-top:10px; color:#1e3c72; font-weight:800;">Top Searched Topics:</div>
@@ -385,8 +377,8 @@ document.addEventListener("DOMContentLoaded", () => {
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2" defer></script>
 
 <script>
 function escJsText(value) {
@@ -504,8 +496,56 @@ function renderFeedCard(a, idx){
       </div>
 
       <div style="margin-top:12px; padding:10px 12px; border-radius:10px; background:#fffaf3; border:1px solid #ffe2b8;">
-        <div style="color:#8b5e00; font-weight:800; margin-bottom:4px;">🧠 Why This Is ${(a.label || "Check").toUpperCase()}</div>
-        ${(a.explanation_reasons || []).map(reason => `<div style="color:#6d5522; font-size:12px; line-height:1.5;">Reason: ${reason}</div>`).join("")}
+        <div style="color:#8b5e00; font-weight:800; margin-bottom:4px;">Why we marked this as ${(a.label || "Check").toUpperCase()}</div>
+        ${(a.explanation_reasons || []).map(reason => `<div style="color:#6d5522; font-size:12px; line-height:1.5;">- ${reason}</div>`).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderHighlightCard(a){
+  const credibility =
+    a.label === "Real"
+      ? `<span class="badge real">REAL</span>`
+      : a.label === "Fake"
+        ? `<span class="badge fake">FAKE</span>`
+        : `<span class="badge warn">CHECK</span>`;
+
+  const summary = (a.ai_summary || "Summary not available.").trim();
+  const clippedSummary = summary.length > 420 ? `${summary.slice(0, 420)}...` : summary;
+
+  return `
+    <div class="card news-card top-highlight-card" style="border:1px solid #d9ecff;">
+      <div class="news-head-row">
+        <div class="news-head-text">
+          <h3 style="margin:0; color:#0f2d5c; font-size:16px;">${a.title || "No title"}</h3>
+          <div style="margin-top:8px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <span class="chip" style="font-size:11px;">${a.published_display || "Published: Unknown"} | ${a.time_ago || "Recently"}</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="color:#2a5298; font-size:12px; font-weight:700; line-height:1.6; margin:12px 0;">
+        ${clippedSummary}
+      </div>
+
+      <div class="top-card-bottom-row">
+        <div class="top-card-buttons">
+          <a href="${a.link}" target="_blank" class="read-more-btn"
+             onclick="trackArticleClick('${escJsText(a.title)}', '${escJsText(a.category)}', '${escJsText(a.source_name)}')">Read More</a>
+
+          <button
+            type="button"
+            class="share-btn"
+            onclick="shareArticle('${escJsText(a.title)}', '${escJsText(a.link)}')"
+            aria-label="Share article">
+            <i class="fa-solid fa-share-nodes"></i> Share
+          </button>
+        </div>
+
+        <div class="top-card-badge">
+          ${credibility}
+        </div>
       </div>
     </div>
   `;
@@ -740,7 +780,45 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  setInterval(autoRefreshNews, autoRefreshSeconds * 1000);
+  if (autoRefreshSeconds > 0) {
+    setInterval(autoRefreshNews, autoRefreshSeconds * 1000);
+  }
+});
+
+document.addEventListener("DOMContentLoaded", () => {
+  const readingTimeEl = document.getElementById("readingTimeValue");
+  const baseSeconds = parseInt(readingTimeEl?.dataset.baseSeconds || "0", 10) || 0;
+  const userId = readingTimeEl?.dataset.userId || "";
+  const activityDate = readingTimeEl?.dataset.activityDate || "";
+  const storageKey = userId && activityDate ? `informax_reading_${userId}_${activityDate}` : "";
+
+  const formatReadingTime = (seconds) => {
+    if (seconds < 0) return "-";
+    if (seconds === 0) return "<1m";
+    if (seconds < 60) return "<1m";
+    const totalMinutes = Math.floor(seconds / 60);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    return hours > 0 ? `${hours}h ${minutes}m` : `${totalMinutes}m`;
+  };
+
+  const getLiveSeconds = () => {
+    const storedSeconds = storageKey ? (parseInt(localStorage.getItem(storageKey) || "0", 10) || 0) : 0;
+    const state = window.__informaxReadingState;
+    if (state && state.storageKey === storageKey) {
+      const runningSeconds = (state.baseSeconds || 0) + Math.max(0, Math.floor((Date.now() - state.startedAt) / 1000));
+      return Math.max(baseSeconds, storedSeconds, runningSeconds);
+    }
+    return Math.max(baseSeconds, storedSeconds);
+  };
+
+  const updateReadingTimeDisplay = () => {
+    if (!readingTimeEl) return;
+    readingTimeEl.textContent = formatReadingTime(getLiveSeconds());
+  };
+
+  updateReadingTimeDisplay();
+  setInterval(updateReadingTimeDisplay, 1000);
 });
 
 document.addEventListener("DOMContentLoaded", () => {

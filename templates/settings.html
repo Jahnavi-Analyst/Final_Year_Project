@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card settings-page" style="margin-top:20px; padding:22px;">
+  <h2 style="margin:0; color:#0f2d5c;">Settings</h2>
+  <p style="margin:8px 0 0; color:#274472;">Manage preferences, theme, support, and account safety from one place.</p>
+
+  {% if settings_saved %}
+  <div style="margin-top:14px; padding:12px 14px; border-radius:10px; background:#eef9f0; border:1px solid #b7e4c1; color:#13653f; font-weight:700;">
+    Settings saved successfully.
+  </div>
+  {% endif %}
+
+  <form method="POST" action="/settings" style="margin-top:18px; display:grid; gap:18px;">
+    <input type="hidden" name="action" value="save_settings">
+    <div class="card" style="background:#f8fbff;">
+      <h3 style="margin-top:0; color:#123b7a;">Theme</h3>
+      <div style="display:flex; gap:14px; flex-wrap:wrap; color:#274472; font-weight:700;">
+        <label><input type="radio" name="theme_preference" value="light" {% if selected_theme_preference == 'light' %}checked{% endif %}> Light mode</label>
+        <label><input type="radio" name="theme_preference" value="dark" {% if selected_theme_preference == 'dark' %}checked{% endif %}> Dark mode</label>
+        <label><input type="radio" name="theme_preference" value="system" {% if selected_theme_preference == 'system' %}checked{% endif %}> System default</label>
+      </div>
+    </div>
+
+    <details class="card settings-help-panel" style="background:#f8fbff;">
+      <summary class="settings-help-toggle">
+        <i class="fa-solid fa-circle-question"></i>
+        Help & Support
+      </summary>
+      <div style="margin-top:16px;">
+      <p style="color:#274472;">If you face account, news, saved article, OTP, or filter issues, contact the admin at <b>{{ support_email }}</b>.</p>
+      <a href="mailto:{{ support_email }}?subject=InformaX%20AI%20Support" class="share-btn" style="display:inline-flex; margin-top:14px; text-decoration:none;">Email Support</a>
+      </div>
+    </details>
+
+    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+      <button type="submit" class="read-more-btn" style="border:none; cursor:pointer;">Save Settings</button>
+    </div>
+  </form>
+
+  <form method="POST" action="/settings" style="margin-top:18px;" onsubmit="return confirm('Delete this account? You will be logged out and must sign up again to use the app.');">
+    <input type="hidden" name="action" value="delete_account">
+    <div class="card" style="background:#fff8f8; border-color:#ffd1d1;">
+      <h3 style="margin-top:0; color:#b42318;">Delete Account</h3>
+      <button type="submit" class="share-btn" style="border:none; cursor:pointer; color:#b42318;">Delete My Account</button>
+    </div>
+  </form>
+</div>
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const themeInputs = document.querySelectorAll('input[name="theme_preference"]');
+  themeInputs.forEach((input) => {
+    input.addEventListener("change", () => {
+      document.body.classList.remove("theme-light", "theme-dark", "theme-system");
+      document.body.classList.add(`theme-${input.value}`);
+    });
+  });
+});
+</script>
+{% endblock %}
