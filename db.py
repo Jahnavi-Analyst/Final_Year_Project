@@ -2,12 +2,17 @@ import os
 import sqlite3
 from threading import Lock
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved.db")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_DB_PATH = os.path.join(BASE_DIR, "saved.db")
+DB_PATH = os.path.abspath(os.environ.get("DB_PATH", DEFAULT_DB_PATH))
 _DB_INIT_LOCK = Lock()
 _DB_INITIALIZED = False
 
 
 def get_conn():
+    db_dir = os.path.dirname(DB_PATH)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
