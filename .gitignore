@@ -5,6 +5,7 @@ __pycache__/
 *.pyd
 
 .env
+/.python-version
 
 saved.db
 informax.db
@@ -16,3 +17,11 @@ informax.db
 *.log
 
 video_ref_frame.jpg
+
+/dataset/
+/test_news.py
+/train_model.py
+/PROJECT_BOOK*.md
+/*.docx
+/*.pptx
+/*.pdf

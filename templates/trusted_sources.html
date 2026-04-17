@@ -3,12 +3,13 @@
 {% block content %}
 
 <div class="card trusted-sources-page" style="margin-top:20px; padding:22px; max-height:calc(100vh - 170px); overflow-y:auto; overflow-x:hidden; padding-right:14px;">
-  <a href="{{ url_for('home', date=selected_date) if selected_date else url_for('home') }}" class="trusted-home-btn">
+  <a href="{{ url_for('home', date=selected_date) if selected_date else url_for('home') }}" class="trusted-home-btn" onclick="return goBackHome(event, this.href);">
     <i class="fa-solid fa-arrow-left"></i>
     Go Back Home
   </a>
   <h2 class="trusted-page-title" style="margin:0;">Trusted News Sources</h2>
-  <p class="trusted-page-subtitle" style="margin:8px 0 0;">Click a source to view its news.</p>
+  <p class="trusted-page-subtitle" style="margin:8px 0 0;">Click a source to view its news from 12:00 AM to the latest published article for the selected day.</p>
+  <div style="margin-top:8px; color:#274472; font-weight:700;">{{ today_text }}</div>
 
   {% for category, sources in source_showcase.items() %}
     <div style="margin-top:24px;">
@@ -52,5 +53,28 @@
     </div>
   {% endfor %}
 </div>
+
+<script>
+function goBackHome(ev, fallbackHref) {
+  if (ev) {
+    ev.preventDefault();
+  }
+  try {
+    if (document.referrer) {
+      const ref = new URL(document.referrer);
+      const sameOrigin = ref.origin === window.location.origin;
+      const refPath = ref.pathname || "";
+      if (sameOrigin && (refPath === "/" || refPath === "/search" || refPath.startsWith("/category/"))) {
+        window.history.back();
+        return false;
+      }
+    }
+  } catch (error) {
+    console.log("goBackHome fallback", error);
+  }
+  window.location.href = fallbackHref;
+  return false;
+}
+</script>
 
 {% endblock %}

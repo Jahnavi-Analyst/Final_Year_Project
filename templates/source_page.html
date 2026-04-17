@@ -5,7 +5,7 @@
 <div class="card" style="margin-top:20px; padding:18px;">
   <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap;">
     <div>
-      <a href="{{ url_for('trusted_sources', date=selected_date) if selected_date else url_for('trusted_sources') }}" class="source-back-link"
+      <a href="{{ url_for('trusted_sources') }}" class="source-back-link"
          style="
             display:inline-flex;
             align-items:center;
@@ -249,13 +249,21 @@ function shareNews(ev, link) {
     ev.preventDefault();
     ev.stopPropagation();
   }
+  if (!link) {
+    alert("Link not available.");
+    return;
+  }
   if (navigator.share) {
     navigator.share({
       title: "Check this news",
       text: "Interesting news article",
       url: link
     })
-    .catch((error) => console.log("Share failed:", error));
+    .catch(() => {
+      navigator.clipboard.writeText(link)
+        .then(() => alert("Link copied!"))
+        .catch(() => alert("Copy failed."));
+    });
   } else {
     navigator.clipboard.writeText(link)
       .then(() => alert("Link copied!"))

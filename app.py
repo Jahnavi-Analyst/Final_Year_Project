@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, jsonify, session, g
+from flask import Flask, render_template, request, redirect, jsonify, session, g, has_request_context
 import os, re, smtplib, secrets
 import math
 import joblib
@@ -81,7 +81,7 @@ def newsapi_fetch(query=None, category=None, selected_date=None, max_results=30,
             page_params = dict(params)
             page_params["page"] = page_number
 
-            response = http_get(url, params=page_params, timeout=4)
+            response = http_get(url, params=page_params, timeout=adaptive_http_timeout(3.0, 4.0, 6.0))
             data = response.json()
             if data.get("status") not in (None, "ok"):
                 NEWSAPI_BACKOFF_UNTIL = datetime.now(APP_TIMEZONE) + timedelta(seconds=90)
@@ -133,6 +133,15 @@ from db import (
     get_recent_password_reset_requests, get_saved_counts_by_user,
     clear_admin_data, get_conn, deactivate_user
 )
+from app_constants import (
+    BREAKING_KEYWORDS, CATEGORY_QUERY, COUNTRY_CODE_TO_NAME, COUNTRY_NAME_TO_CODE,
+    COUNTRY_OPTIONS, PUBLISHER_STOPWORDS, SENSATIONAL_WORDS, SOURCE_DOMAIN_ALIASES,
+    SOURCE_FEED_MAP, SOURCE_FETCH_VARIANTS, SOURCE_OPTIONS, SOURCE_QUERY_MAP,
+    SOURCE_ROUTE_DOMAIN_MAP, SOURCE_SHOWCASE, STOPWORDS, SUMMARY_STOPWORDS,
+    TRUSTED_ONLY_CATEGORIES, TRUSTED_SHOWCASE_QUERY_MAP,
+)
+from app_auth import register_auth_routes
+from app_admin import register_admin_routes
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "informaxai_secret_2026")
@@ -150,6 +159,23 @@ AUTH_ALLOWLIST = {
     "logout",
     "static",
 }
+
+TIMESTAMP_FORMAT = "%d-%m-%Y %I:%M %p"
+SUPPORT_EMAIL = "informaxai.support@gmail.com"
+CATEGORY_ALLOWLIST = {
+    "technology", "business", "health", "sports",
+    "politics", "entertainment", "disaster", "climate",
+}
+SOCIAL_PROVIDER_META = {
+    "google": ("Google", "google"),
+    "microsoft": ("Microsoft", "microsoft"),
+}
+HELP_ITEMS = [
+    ("Why is an article marked Real, Fake, or Check?", "The app combines source reputation, article text analysis, and model confidence to assign a credibility label."),
+    ("How does date filtering work?", "Today is shown by default. If you pick a previous date, the app tries to fetch only that day's articles."),
+    ("Why do some trusted sources show fewer articles?", "That depends on what NewsAPI and RSS feeds publish or index for the selected day."),
+    ("How do saved articles work?", "Saved articles are linked to the logged-in user only, so one user cannot see another user's saved list."),
+]
 
 def current_user():
     if hasattr(g, "_current_user_loaded"):
@@ -188,7 +214,7 @@ def log_user_event(event_type, details=""):
     if not user:
         return
     try:
-        log_activity(user["id"], event_type, details, now_local().strftime("%d-%m-%Y %I:%M %p"))
+        log_activity(user["id"], event_type, details, now_text())
     except Exception:
         pass
 
@@ -197,6 +223,8 @@ def current_user_id():
     return int(user["id"]) if user else 0
 
 def current_saved_links():
+    if not has_request_context():
+        return set()
     uid = current_user_id()
     if not uid:
         return set()
@@ -225,7 +253,7 @@ def parse_activity_time(text):
     value = safe_text(text).strip()
     if not value:
         return None
-    for fmt in ("%d-%m-%Y %I:%M %p", "%Y-%m-%d %H:%M:%S"):
+    for fmt in (TIMESTAMP_FORMAT, "%Y-%m-%d %H:%M:%S"):
         try:
             return datetime.strptime(value, fmt)
         except Exception:
@@ -290,9 +318,9 @@ def keep_admin_in_dashboard():
 # ---------- Simple in-memory cache ----------
 CACHE = {}
 CACHE_TTL_SECONDS = 600
-LIVE_CACHE_TTL_SECONDS = 20
-SOURCE_FEED_CACHE_TTL_SECONDS = 30
-TRUSTED_SHOWCASE_CACHE_TTL_SECONDS = 30
+LIVE_CACHE_TTL_SECONDS = 60
+SOURCE_FEED_CACHE_TTL_SECONDS = 180
+TRUSTED_SHOWCASE_CACHE_TTL_SECONDS = 120
 ARTICLE_TEXT_CACHE_TTL_SECONDS = 1800
 TREND_CACHE_TTL_SECONDS = 300
 NETWORK_LATENCY_SAMPLES = deque(maxlen=8)
@@ -301,25 +329,26 @@ FAST_NETWORK_LATENCY_SECONDS = 1.0
 SLOW_NETWORK_LATENCY_SECONDS = 2.5
 HTTP_POOL_CONNECTIONS = 16
 HTTP_POOL_MAXSIZE = 16
-DASHBOARD_SUMMARY_FETCH_LIMIT = 6
-SOURCE_SUMMARY_FETCH_LIMIT = 8
-DAILY_NEWS_MAX_RESULTS = 180
-DAILY_RSS_MAX_RESULTS = 120
-SOURCE_PAGE_MAX_RESULTS = 120
+DASHBOARD_SUMMARY_FETCH_LIMIT = 2
+SOURCE_SUMMARY_FETCH_LIMIT = 4
+DAILY_NEWS_MAX_RESULTS = 60
+DAILY_RSS_MAX_RESULTS = 45
+SOURCE_PAGE_MAX_RESULTS = 60
 NEWSAPI_PAGE_SIZE = 100
-NEWSAPI_MAX_PAGES = 3
-CACHE_VERSION = "v3"
-HOME_SOURCE_SCAN_MAX_WORKERS = 6
-HOME_SOURCE_SCAN_PER_SOURCE = 16
+NEWSAPI_MAX_PAGES = 2
+CACHE_VERSION = "v5"
+HOME_SOURCE_SCAN_MAX_WORKERS = 4
+HOME_SOURCE_SCAN_PER_SOURCE = 8
+INITIAL_FETCH_MAX_WORKERS = 3
 THREAD_LOCAL = local()
 
 def cache_ttl_for_key(key):
     cache_key = safe_text(key)
-    if cache_key.startswith("dashboard_v3::"):
+    if cache_key.startswith("dashboard_v4::"):
         return LIVE_CACHE_TTL_SECONDS
     if cache_key.startswith("rss::"):
         return LIVE_CACHE_TTL_SECONDS
-    if cache_key.startswith("source_v3::"):
+    if cache_key.startswith("source_v4::"):
         return LIVE_CACHE_TTL_SECONDS
     if cache_key.startswith("sourcefeeds::"):
         return SOURCE_FEED_CACHE_TTL_SECONDS
@@ -392,6 +421,28 @@ def adaptive_fetch_workers(fetch_count):
         max_workers = 2
     return max(1, min(max_workers, fetch_count))
 
+def adaptive_http_timeout(fast_timeout, normal_timeout=None, slow_timeout=None):
+    normal_value = normal_timeout if normal_timeout is not None else fast_timeout
+    slow_value = slow_timeout if slow_timeout is not None else max(fast_timeout, normal_value)
+    profile = current_network_profile()
+    if profile == "fast":
+        return fast_timeout
+    if profile == "slow":
+        return slow_value
+    return normal_value
+
+def adaptive_result_count(requested_count, minimum_count=10):
+    requested = max(0, int(requested_count or 0))
+    if requested <= 0:
+        return 0
+
+    profile = current_network_profile()
+    if profile == "fast":
+        return requested
+    if profile == "slow":
+        return min(requested, max(minimum_count, requested // 3))
+    return min(requested, max(minimum_count, requested // 2))
+
 def should_allow_live_summary_fetch():
     return current_network_profile() != "slow"
 
@@ -415,13 +466,22 @@ def http_get(url, **kwargs):
 @app.after_request
 def add_no_cache_headers(response):
     if safe_text(response.mimetype).startswith("text/html"):
-        response.headers["Cache-Control"] = "no-cache, max-age=0, must-revalidate"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
+        endpoint = safe_text(request.endpoint)
+        if endpoint in AUTH_ALLOWLIST or endpoint.startswith("admin"):
+            response.headers["Cache-Control"] = "no-store, no-cache, max-age=0, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        else:
+            response.headers["Cache-Control"] = "private, max-age=30, stale-while-revalidate=90"
+            response.headers.pop("Pragma", None)
+            response.headers.pop("Expires", None)
     return response
 
 def now_local():
     return datetime.now(APP_TIMEZONE)
+
+def now_text():
+    return now_local().strftime(TIMESTAMP_FORMAT)
 
 def otp_remaining_seconds(expires_at_text):
     try:
@@ -528,6 +588,18 @@ def has_meaningful_article_body(text, min_words=MIN_FULL_ARTICLE_WORDS):
     )
     return sentence_count >= 2
 
+def build_content_preview(text, max_words=90):
+    body = normalize_article_body_text(text)
+    if not body:
+        return ""
+    words = body.split()
+    if len(words) <= max_words:
+        return body
+    preview = " ".join(words[:max_words]).strip()
+    if preview and not preview.endswith((".", "!", "?")):
+        preview += "..."
+    return preview
+
 def summarize_complete_article_text(title, description="", content="", fetched_content=""):
     full_article_body = normalize_article_body_text(content, fetched_content)
     if has_meaningful_article_body(full_article_body):
@@ -565,7 +637,7 @@ def fetch_article_text_excerpt(link: str) -> str:
         }
         response = http_get(
             url,
-            timeout=6,
+            timeout=adaptive_http_timeout(4.0, 6.0, 8.0),
             headers=headers,
             allow_redirects=True,
         )
@@ -578,7 +650,7 @@ def fetch_article_text_excerpt(link: str) -> str:
             if discovered_url and discovered_url != active_url:
                 response = http_get(
                     discovered_url,
-                    timeout=6,
+                    timeout=adaptive_http_timeout(4.0, 6.0, 8.0),
                     headers=headers,
                     allow_redirects=True,
                 )
@@ -637,7 +709,7 @@ def fetch_feed_with_timeout(url: str, timeout=3.0):
     try:
         response = http_get(
             safe_text(url).strip(),
-            timeout=timeout,
+            timeout=adaptive_http_timeout(min(timeout, 2.5), timeout, max(timeout, 5.0)),
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
             }
@@ -703,14 +775,84 @@ def render_auth_page(template_name, **extra):
     context.update(extra)
     return render_template(template_name, **context)
 
+def create_account_record(name, email, password_hash, activity_message):
+    should_be_admin = False
+    if ADMIN_EMAIL and email == ADMIN_EMAIL:
+        should_be_admin = True
+    elif not get_all_users():
+        should_be_admin = True
+
+    user_id = create_user(
+        name=name,
+        email=email,
+        password_hash=password_hash,
+        created_at=now_text(),
+        is_admin=1 if should_be_admin else 0
+    )
+    log_activity(user_id, "signup", activity_message, now_text())
+    return user_id
+
+def store_and_send_password_reset_otp(email):
+    otp_code = f"{secrets.randbelow(900000) + 100000}"
+    store_password_reset_otp(
+        email,
+        otp_code,
+        (now_local() + timedelta(seconds=OTP_EXPIRY_SECONDS)).strftime("%Y-%m-%d %H:%M:%S"),
+        now_text()
+    )
+    send_reset_otp_email(email, otp_code)
+
+def reset_news_filters(clear_search=False):
+    session["selected_country"] = "WORLD"
+    session["selected_source"] = ""
+    session["typed_country"] = ""
+    if clear_search:
+        session.pop("last_search_topic", None)
+    CACHE.clear()
+
+def render_dashboard_page(mode="home", **kwargs):
+    return render_template("dashboard.html", **build_dashboard(mode=mode, **kwargs))
+
+def source_page_context(query, selected_date=None, articles=None, error_msg=None, is_loading=False):
+    context = build_base_context(active="home", selected_date=selected_date)
+    context.update({
+        "articles": articles or [],
+        "source_name": query.replace("%20", " ").upper(),
+        "source_query": query,
+        "today_text": (parse_selected_date(selected_date) or today_local_date()).strftime("%A, %d %B %Y"),
+        "max_date": now_local().strftime("%Y-%m-%d"),
+        "error_msg": error_msg,
+        "is_loading": bool(is_loading),
+    })
+    return context
+
+def set_article_saved_state(uid, title, link, label="Real", score=0.0, saved_at=None):
+    if is_saved(link, uid):
+        delete_saved_by_link(link, uid)
+        log_user_event("save_remove", f"Removed saved article: {title or link}")
+        return False
+
+    save_article(uid, title or "No title", link, label or "Real", score, saved_at or datetime.now().strftime(TIMESTAMP_FORMAT))
+    log_user_event("save_add", f"Saved article: {title or link}")
+    return True
+
+def settings_context(settings_saved=False):
+    context = build_base_context(active="settings")
+    context.update({
+        "settings_saved": settings_saved,
+        "support_email": SUPPORT_EMAIL,
+        "selected_theme_preference": session.get("theme_preference", "system"),
+    })
+    return context
+
 def complete_login(user, remember=False):
     session["welcome_mode"] = "back" if safe_text(user["last_login_at"]).strip() else "welcome"
     session.permanent = bool(remember)
     session["user_id"] = user["id"]
     session["remember_me"] = bool(remember)
     session.pop("password_reset_verified_email", None)
-    update_last_login(user["id"], now_local().strftime("%d-%m-%Y %I:%M %p"))
-    log_activity(user["id"], "login", "User logged in", now_local().strftime("%d-%m-%Y %I:%M %p"))
+    update_last_login(user["id"], now_text())
+    log_activity(user["id"], "login", "User logged in", now_text())
     if is_admin_user(user):
         session["admin_app_mode"] = False
         response = redirect("/admin")
@@ -735,460 +877,6 @@ vectorizer = joblib.load(os.path.join(MODEL_FOLDER, "vectorizer.pkl"))
 NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY", "").strip()
 if not NEWSAPI_KEY:
     NEWSAPI_KEY = "8377c27efe1b4f00adc2df8fdef408a5"
-
-STOPWORDS = {
-    "the","a","an","and","or","of","to","in","on","for","with","as","at","by","from",
-    "today","live","updates","update","says","said","after","before","over","into",
-    "india","news","report","reports","will","may","can","how","why","what","when",
-    "it","its","they","their","his","her","you","your","is","are","was","were"
-}
-
-PUBLISHER_STOPWORDS = {
-    "hindu","hindustan","times","toi","ndtv","reuters","bbc","guardian","express",
-    "india","today","mint","economic","tribune","telegraph","print","news","live",
-    "updates","update","report","reports"
-}
-
-SUMMARY_STOPWORDS = {
-    "click", "read more", "watch live", "updated", "breaking", "latest", "photos",
-    "video", "subscribe", "newsletter"
-}
-
-SENSATIONAL_WORDS = {
-    "shocking", "explosive", "massive", "huge", "unbelievable", "stunning", "panic",
-    "chaos", "bombshell", "exposed", "viral", "dramatic", "outrage", "crisis"
-}
-
-BREAKING_KEYWORDS = {
-    "breaking", "earthquake", "tsunami", "cyclone", "flood", "war", "attack",
-    "explosion", "crash", "wildfire", "emergency", "evacuation", "storm"
-}
-
-COUNTRY_OPTIONS = [
-    ("World", "WORLD"),
-    ("India", "IN"),
-    ("United States", "US"),
-    ("United Kingdom", "GB"),
-    ("Canada", "CA"),
-    ("Australia", "AU"),
-    ("UAE", "AE"),
-    ("Singapore", "SG"),
-    ("Japan", "JP"),
-    ("Germany", "DE"),
-    ("France", "FR"),
-]
-
-COUNTRY_CODE_TO_NAME = {code: label for label, code in COUNTRY_OPTIONS}
-
-SOURCE_OPTIONS = [
-    ("All Trusted (Default)", ""),
-    ("The Hindu", "thehindu.com"),
-    ("Hindustan Times", "hindustantimes.com"),
-    ("Times of India", "timesofindia.indiatimes.com"),
-    ("Economic Times", "economictimes.indiatimes.com"),
-    ("Indian Express", "indianexpress.com"),
-    ("India Today", "indiatoday.in"),
-    ("NDTV", "ndtv.com"),
-    ("Livemint", "livemint.com"),
-    ("Business Standard", "business-standard.com"),
-    ("Moneycontrol", "moneycontrol.com"),
-    ("Deccan Herald", "deccanherald.com"),
-    ("Reuters", "reuters.com"),
-    ("BBC", "bbc.com"),
-    ("Associated Press", "apnews.com"),
-    ("Bloomberg", "bloomberg.com"),
-    ("The Guardian", "theguardian.com"),
-    ("TechCrunch", "techcrunch.com"),
-    ("The Verge", "theverge.com"),
-    ("Ars Technica", "arstechnica.com"),
-    ("ESPN", "espn.com"),
-    ("Cricbuzz", "cricbuzz.com"),
-    ("ESPNcricinfo", "espncricinfo.com"),
-    ("Sky Sports", "skysports.com"),
-    ("ICC Cricket", "icc-cricket.com"),
-    ("BCCI", "bcci.tv"),
-    ("IPL", "iplt20.com"),
-    ("FIFA", "fifa.com"),
-    ("UEFA", "uefa.com"),
-    ("Olympics", "olympics.com"),
-    ("NBA", "nba.com"),
-    ("NFL", "nfl.com"),
-    ("MLB", "mlb.com"),
-    ("NHL", "nhl.com"),
-    ("Formula 1", "formula1.com"),
-    ("MotoGP", "motogp.com"),
-    ("ATP Tour", "atptour.com"),
-    ("WTA Tennis", "wtatennis.com"),
-    ("Premier League", "premierleague.com"),
-]
-
-SOURCE_SHOWCASE = {
-    "Technology": [
-        {"name": "Techcrunch", "logo": "/static/images/TC.jpg", "badge": "TC"},
-        {"name": "The Verge", "logo": "/static/images/the-verge.jpg", "badge": "TV"},
-        {"name": "Wired", "logo": "/static/images/wired.jpg", "badge": "WI"},
-        {"name": "Ars Technica", "logo": "/static/images/arstechnica.jpg", "badge": "AT"},
-        {"name": "Engadget", "logo": "/static/images/Engadget_Logo.png", "badge": "EN"},
-        {"name": "ZDNET", "logo": "/static/images/zdnet.jpg", "badge": "ZD"},
-        {"name": "Android Police", "logo": "/static/images/android police.jpg", "badge": "AP"},
-        {"name": "Mashable India", "logo": "/static/images/mashable", "badge": "MI"},
-
-    ],
-    "Business": [
-        {"name": "Reuters", "logo": "/static/images/reuters.jpg", "badge": "RE"},
-        {"name": "Bloomberg", "logo": "/static/images/bloomberg.jpg", "badge": "BL"},
-        {"name": "CNBC", "logo": "/static/images/Cnbc.jpg", "badge": "CN"},
-        {"name": "Financial Times", "logo": "/static/images/financial-times.jpg", "badge": "FT"},
-        {"name": "Forbes", "logo": "/static/images/forbes.jpg", "badge": "FO"},
-        {"name": "WSJ", "logo": "/static/images/wsj-logo.jpg", "badge": "WS"},
-        {"name": "Economic Times", "logo": "/static/images/economic times.jpg", "badge": "ET"},
-        {"name": "NDTV Profit", "logo": "/static/images/ndtv-profit.jpg", "badge": "NP"},
-        {"name": "Business Standards", "logo": "/static/images/business standards.jpg", "badge": "BS"},
-        {"name": "Investment Guru", "logo": "/static/images/investment guru.jpg", "badge": "IG"},
-    ],
-    "World": [
-        {"name": "BBC News", "logo": "/static/images/BBC.jpg", "badge": "BBC"},
-        {"name": "NDTV News", "logo": "/static/images/ndtv.jpg", "badge": "ND"},
-        {"name": "AL jazeera", "logo": "/static/images/aljazeera.jpg", "badge": "AJ"},
-        {"name": "The Guardian", "logo": "/static/images/The-Guardian.jpg", "badge": "GU"},
-        {"name": "CNN", "logo": "/static/images/cnn.jpg", "badge": "CNN"},
-        {"name": "AP News", "logo": "/static/images/AP.jpg", "badge": "AP"},
-    ],
-    "India": [
-        {"name": "The Hindu", "logo": "/static/images/the hindu.jpg", "badge": "TH"},
-        {"name": "Hindustan Times", "logo": "/static/images/hindustan times.jpg", "badge": "HT"},
-        {"name": "Indian Express", "logo": "/static/images/the indian express.jpg", "badge": "IE"},
-        {"name": "Times of India", "logo": "/static/images/the times of india.jpg", "badge": "TOI"},
-        {"name": "India Today", "logo": "/static/images/india today.jpg", "badge": "IT"},
-        {"name": "Money Control", "logo": "/static/images/money control.jpg", "badge": "MC"},
-        {"name": "Deccan Herald", "logo": "/static/images/deccan herland.jpg", "badge": "DH"},
-        {"name": "News18", "logo": "/static/images/news18.jpg", "badge": "N18"},
-        {"name": "WION", "logo": "/static/images/wion.jpg", "badge": "WION"},
-    ],
-    "Sports": [
-        {"name": "NDTV sports", "logo": "/static/images/ndtvsports.jpg", "badge": "NS"},
-        {"name": "Sport Star", "logo": "/static/images/sportstar.jpg", "badge": "SS"},
-        {"name": "IPL T20", "logo": "/static/images/ipl.jpg", "badge": "IPL"},
-        {"name": "Chess", "logo": "/static/images/chess.jpg", "badge": "Chess"},
-        {"name": "ICC", "logo": "/static/images/icc.jpg", "badge": "ICC"},
-        {"name": "Cricketworld", "logo": "/static/images/cricketworld.jpg", "badge": "CW"},
-        {"name": "ESPN", "logo": "/static/images/espn.jpg", "badge": "ES"},
-        {"name": "Sky Sports", "logo": "/static/images/skysports.jpg", "badge": "SS"},
-        {"name": "Cricbuzz", "logo": "/static/images/cricbuzz.jpg", "badge": "CB"},
-        {"name": "Sports illustrated", "logo": "/static/images/sportsillustrated.jpg", "badge": "SI"},
-        {"name": "Barca Universal", "logo": "/static/images/barcauniversal.jpg", "badge": "BU"},
-    ],
-    "Entertainment": [
-        {"name": "Variety", "logo": "/static/images/variety.jpg", "badge": "VA"},
-        {"name": "Hollywood reporter", "logo": "/static/images/hollywood.jpg", "badge": "HR"},
-        {"name": "Billboard", "logo": "/static/images/billboard.jpg", "badge": "BB"},
-        {"name": "Rolling Stone", "logo": "/static/images/Rolling_Stone.jpg", "badge": "RS"},
-        {"name": "123Telugu", "logo": "/static/images/123telugu.jpg", "badge": "123"},
-        {"name": "Gulte", "logo": "/static/images/gulte.jpg", "badge": "GU"},
-        {"name": "Bollywood Hungama", "logo": "/static/images/bollywoodhungama.jpg", "badge": "BH"},
-        {"name": "Sacnilk", "logo": "/static/images/sacnilk.jpg", "badge": "SA"},
-    ],
-    "Science": [
-        {"name": "Space", "logo": "/static/images/space.jpg", "badge": "SP"},
-        {"name": "NASA", "logo": "/static/images/nasa.jpg", "badge": "NASA"},
-        {"name": "Science Daily", "logo": "/static/images/sciencedaily.jpg", "badge": "SD"},
-        {"name": "Science News", "logo": "/static/images/sciencenews.jpg", "badge": "SN"},
-    ],
-}
-
-SOURCE_QUERY_MAP = {
-    "techcrunch.com": "Techcrunch",
-    "theverge.com": "The Verge",
-    "wired.com": "Wired",
-    "arstechnica.com": "Ars Technica",
-    "engadget.com": "Engadget",
-    "zdnet.com": "ZDNET",
-    "androidpolice.com": "Android Police",
-    "in.mashable.com": "Mashable india",
-    "reuters.com": "Reuters",
-    "bloomberg.com": "Bloomberg",
-    "cnbc.com": "CNBC",
-    "ft.com": "Financial Times",
-    "forbes.com": "Forbes",
-    "wsj.com": "Wall Street Journal",
-    "m.economictimes.com": "Economic Times",
-    "ndtvprofit.com": "NDTV Profit",
-    "business-standard.com": "Business Standards",
-    "investmentguruindia.com": "Investment Guru",
-    "bbc.com": "BBC News",
-    "ndtv.com": "NDTV",
-    "aljazeera.com": "AL jazeera",
-    "theguardian.com": "The Guardian",
-    "cnn.com": "CNN",
-    "apnews.com": "AP News",
-    "thehindu.com": "The Hindu",
-    "hindustantimes.com": "Hindustan Times",
-    "indianexpress.com": "Indian Express",
-    "timesofindia.indiatimes.com": "Times of India",
-    "indiatoday.in": "India Today",
-    "moneycontrol.com": "Money Control",
-    "deccanherald.com": "Deccan Herland",
-    "news18.com": "News18",
-    "wionews.com": "WION",
-    "espn.com": "ESPN",
-    "skysports.com": "Sky Sports",
-    "cricbuzz.com": "Cricbuzz",
-    "si.com": "Sports Illustrated",
-    "sports.ndtv.com": "NDTV Sports",
-    "sportstat.thehindu.com": "Sports Star",
-    "iplt20.com": "IPL T20",
-    "chess.com": "Chess",
-    "icc-cricket.com": "ICC",
-    "cricketworld.com": "Cricket World",
-    "barcauniversal.com": "Barca Universal",
-    "variety.com": "Variety",
-    "hollywoodreporter.com": "Hollywood Reporter",
-    "billboard.com": "Billboard",
-    "rollingstone.com": "Rolling Stone",
-    "123Telugu.com": "123Telugu",
-    "gulte.com": "Gulte", 
-    "bollywoodhungama.com": "Bollywood Hungama",
-    "sacnilk.com": "Sacnilk",
-    "space.com": "Space",
-    "nasa.gov": "NASA",
-    "sciencenews.org": "Science News",
-    "sciencedaily.com": "Science Daily",
-    
-}
-
-SOURCE_ROUTE_DOMAIN_MAP = {
-    "bbc news": "bbc.com",
-    "bbc": "bbc.com",
-    "ndtv news": "ndtv.com",
-    "ndtv": "ndtv.com",
-    "reuters": "reuters.com",
-    "reuters business": "reuters.com",
-    "bloomberg": "bloomberg.com",
-    "techcrunch": "techcrunch.com",
-    "the verge": "theverge.com",
-    "wired": "wired.com",
-    "ars technica": "arstechnica.com",
-    "engadget": "engadget.com",
-    "zdnet": "zdnet.com",
-    "cnbc": "cnbc.com",
-    "financial times": "ft.com",
-    "forbes": "forbes.com",
-    "wsj": "wsj.com",
-    "wall street journal": "wsj.com",
-    "al jazeera": "aljazeera.com",
-    "guardian": "theguardian.com",
-    "cnn": "cnn.com",
-    "ap news": "apnews.com",
-    "ap": "apnews.com",
-    "the hindu": "thehindu.com",
-    "hindustan times": "hindustantimes.com",
-    "indian express": "indianexpress.com",
-    "times of india": "timesofindia.indiatimes.com",
-    "india today": "indiatoday.in",
-    "moneycontrol": "moneycontrol.com",
-    "espn": "espn.com",
-    "sky sports": "skysports.com",
-    "cricbuzz": "cricbuzz.com",
-    "sports illustrated": "si.com",
-    "android police": "androidpolice.com",
-    "mashable india": "in.mashable.com",
-    "economic times": "m.economictimes.com",
-    "ndtv profit": "ndtvprofit.com",
-    "business standards": "business-standard.com",
-    "business standard": "business-standard.com",
-    "investment guru": "investmentguruindia.com",
-    "the guardian": "theguardian.com",
-    "money control": "moneycontrol.com",
-    "deccan herald": "deccanherald.com",
-    "news18": "news18.com",
-    "wion": "wionews.com",
-    "ndtv sports": "sports.ndtv.com",
-    "sport star": "sportstar.thehindu.com",
-    "sports star": "sportstar.thehindu.com",
-    "ipl t20": "iplt20.com",
-    "chess": "chess.com",
-    "icc": "icc-cricket.com",
-    "cricketworld": "cricketworld.com",
-    "cricket world": "cricketworld.com",
-    "barca universal": "barcauniversal.com",
-    "variety": "variety.com",
-    "hollywood reporter": "hollywoodreporter.com",
-    "billboard": "billboard.com",
-    "rolling stone": "rollingstone.com",
-    "123telugu": "123telugu.com",
-    "gulte": "gulte.com",
-    "bollywood hungama": "bollywoodhungama.com",
-    "sacnilk": "sacnilk.com",
-    "space": "space.com",
-    "nasa": "nasa.gov",
-    "science daily": "sciencedaily.com",
-    "science news": "sciencenews.org",
-}
-
-SOURCE_FEED_MAP = {
-    "techcrunch.com": [
-        "https://techcrunch.com/feed/"
-    ],
-    "theverge.com": [
-        "https://www.theverge.com/rss/index.xml"
-    ],
-    "arstechnica.com": [
-        "https://feeds.arstechnica.com/arstechnica/index"
-    ],
-    "bbc.com": [
-        "https://feeds.bbci.co.uk/news/rss.xml",
-        "https://feeds.bbci.co.uk/news/world/rss.xml",
-        "https://feeds.bbci.co.uk/news/technology/rss.xml"
-    ],
-    "ndtv.com": [
-        "https://feeds.feedburner.com/ndtvnews-top-stories",
-        "https://feeds.feedburner.com/ndtvnews-india-news",
-        "https://feeds.feedburner.com/ndtvnews-world-news"
-    ],
-    "reuters.com": [
-        "https://feeds.reuters.com/reuters/topNews",
-        "https://feeds.reuters.com/reuters/worldNews",
-        "https://feeds.reuters.com/reuters/technologyNews"
-    ],
-    "wired.com": [
-        "https://www.wired.com/feed/rss"
-    ],
-    "zdnet.com": [
-        "https://www.zdnet.com/news/rss.xml"
-    ],
-    "engadget.com": [
-        "https://www.engadget.com/rss.xml"
-    ],
-    "cnn.com": [
-        "http://rss.cnn.com/rss/edition.rss"
-    ],
-    "theguardian.com": [
-        "https://www.theguardian.com/world/rss",
-        "https://www.theguardian.com/technology/rss"
-    ],
-    "aljazeera.com": [
-        "https://www.aljazeera.com/xml/rss/all.xml"
-    ],
-    "apnews.com": [
-        "https://apnews.com/hub/ap-top-news?output=amp"
-    ],
-    "cnbc.com": [
-        "https://www.cnbc.com/id/100003114/device/rss/rss.html"
-    ],
-    "espn.com": [
-        "https://www.espn.com/espn/rss/news"
-    ],
-    "variety.com": [
-        "https://variety.com/feed/"
-    ],
-    "androidpolice.com": [
-        "https://www.androidpolice.com/feed/"
-    ],
-    "in.mashable.com": [
-        "https://in.mashable.com/feeds/rss/all"
-    ],
-    "m.economictimes.com": [
-        "https://m.economictimes.com/rssfeedsdefault.cms"
-    ],
-    "business-standard.com": [
-        "https://www.business-standard.com/rss/home_page_top_stories.rss"
-    ],
-    "news18.com": [
-        "https://www.news18.com/rss/india.xml"
-    ],
-    "wionews.com": [
-        "https://www.wionews.com/rss/world.xml"
-    ],
-    "sports.ndtv.com": [
-        "https://feeds.feedburner.com/ndtvsports-latest"
-    ],
-    "cricketworld.com": [
-        "https://www.cricketworld.com/rss.xml"
-    ],
-    "space.com": [
-        "https://www.space.com/feeds/all"
-    ],
-    "nasa.gov": [
-        "https://www.nasa.gov/news-release/feed/"
-    ],
-    "sciencedaily.com": [
-        "https://www.sciencedaily.com/rss/all.xml"
-    ],
-    "sciencenews.org": [
-        "https://www.sciencenews.org/feed"
-    ]
-}
-
-SOURCE_DOMAIN_ALIASES = {
-    "in.mashable.com": ["mashable.com"],
-    "zdnet.com": ["www.zdnet.com"],
-    "bbc.com": ["bbc.co.uk", "www.bbc.com"],
-    "ndtv.com": ["www.ndtv.com"],
-    "ndtvprofit.com": ["www.ndtvprofit.com"],
-    "apnews.com": ["apnews.com", "www.apnews.com"],
-    "theguardian.com": ["www.theguardian.com"],
-    "techcrunch.com": ["www.techcrunch.com"],
-    "theverge.com": ["www.theverge.com"],
-}
-
-SOURCE_FETCH_VARIANTS = {
-    "technology": ["technology", "ai", "gadgets", "software"],
-    "business": ["business", "markets", "economy", "finance"],
-    "world": ["world news", "international news"],
-    "india": ["india news", "india politics", "india business"],
-    "sports": ["sports", "cricket", "football", "tennis"],
-    "entertainment": ["entertainment", "movies", "music", "celebrity"],
-    "climate": [
-        "climate change",
-        "environment",
-        "global warming",
-        "renewable energy",
-        "extreme weather",
-        "sustainability"
-    ],
-}
-
-TRUSTED_SHOWCASE_QUERY_MAP = {
-    "Technology": {"category": "technology"},
-    "Business": {"category": "business"},
-    "World": {"query": "world news"},
-    "India": {"query": "india news"},
-    "Sports": {"category": "sports"},
-    "Entertainment": {"category": "entertainment"},
-}
-
-COUNTRY_NAME_TO_CODE = {
-    "world": "WORLD",
-    "india": "IN",
-    "united states": "US",
-    "usa": "US",
-    "us": "US",
-    "america": "US",
-    "united kingdom": "GB",
-    "uk": "GB",
-    "britain": "GB",
-    "england": "GB",
-    "canada": "CA",
-    "australia": "AU",
-    "uae": "AE",
-    "united arab emirates": "AE",
-    "singapore": "SG",
-    "japan": "JP",
-    "germany": "DE",
-    "france": "FR",
-    "italy": "IT",
-    "spain": "ES",
-    "russia": "RU",
-    "qatar": "QA",
-    "saudi arabia": "SA",
-    "china": "CN",
-    "brazil": "BR",
-    "south africa": "ZA",
-    "pakistan": "PK",
-    "bangladesh": "BD",
-    "sri lanka": "LK",
-    "nepal": "NP",
-}
 
 def typed_country_to_code(name: str) -> str:
     n = (name or "").strip().lower()
@@ -1972,6 +1660,10 @@ def source_domain_candidates(domain: str):
             candidates.append(alias_text)
     return candidates
 
+def is_today_selected_date(selected_date=None):
+    target = parse_selected_date(selected_date)
+    return not target or target == today_local_date()
+
 def sentiment_label(text):
     text = safe_text(text)
 
@@ -2686,19 +2378,6 @@ def get_activity_summary(default_category="Technology"):
         "top_searched_topics": top
     }
 
-CATEGORY_QUERY = {
-    "technology": "technology",
-    "business": "business",
-    "health": "health",
-    "sports": "sports OR cricket OR football OR tennis OR formula 1 OR olympics OR fifa OR uefa OR nba OR premier league",
-    "politics": "politics",
-    "entertainment": "entertainment OR celebrity OR movie OR movies OR film OR cinema OR music OR streaming OR netflix OR bollywood OR hollywood OR tollywood OR web series OR OTT",
-    "disaster": "accident OR disaster OR earthquake OR tsunami OR flood OR cyclone OR fire OR explosion OR landslide",
-    "climate": "climate OR climate change OR environment OR global warming OR pollution OR carbon emissions OR renewable energy OR sustainability OR conservation OR extreme weather OR wildlife OR biodiversity"
-}
-
-TRUSTED_ONLY_CATEGORIES = {"disaster"}
-
 def get_selected_country_code() -> str:
     return session.get("selected_country", "WORLD")
 
@@ -2758,6 +2437,7 @@ def process_article_common(title, description, link, source_domain, saved_links,
         "time_ago": time_ago,
         "ai_summary": summary,
         "content": article_body,
+        "content_preview": build_content_preview(article_body or description),
         "summary_uses_full_article": summary_uses_full_article,
         "bias": bias,
         "source": source_domain,
@@ -2922,7 +2602,8 @@ def google_rss(query=None, category=None, max_results=30, country_code="WORLD", 
             )
         )
 
-    set_cache(cache_key, articles)
+    if articles:
+        set_cache(cache_key, articles)
     return articles
 
 def filter_articles_by_exact_date(articles, selected_date):
@@ -2932,6 +2613,35 @@ def filter_articles_by_exact_date(articles, selected_date):
         a for a in articles
         if article_matches_date(parse_any_datetime(a.get("published_iso")), selected_date)
     ]
+
+def article_matches_category(article, category):
+    category_key = safe_text(category).strip().lower()
+    if not category_key:
+        return True
+
+    category_terms = set(normalize_topic_words(CATEGORY_QUERY.get(category_key, category_key)))
+    category_terms.update(normalize_topic_words(category_key.replace("-", " ")))
+    if not category_terms:
+        return True
+
+    article_text = " ".join([
+        safe_text(article.get("title", "")),
+        safe_text(article.get("description", "")),
+        safe_text(article.get("summary", "")),
+        safe_text(article.get("source", "")),
+    ])
+    article_terms = set(normalize_topic_words(article_text))
+
+    category_aliases = {
+        "sports": {"sports", "cricket", "football", "tennis", "olympics", "fifa", "uefa", "nba", "ipl"},
+        "entertainment": {"entertainment", "celebrity", "movie", "movies", "film", "music", "streaming", "bollywood", "hollywood", "ott"},
+        "climate": {"climate", "environment", "warming", "pollution", "renewable", "sustainability", "weather", "wildlife", "biodiversity"},
+        "disaster": {"accident", "disaster", "earthquake", "tsunami", "flood", "cyclone", "fire", "explosion", "landslide", "storm"},
+    }
+    if category_key in category_aliases:
+        return bool(article_terms.intersection(category_aliases[category_key]))
+
+    return bool(article_terms.intersection(category_terms))
 
 def collect_home_source_day_articles(selected_date, source_domain_filter=""):
     target_date_text = (parse_selected_date(selected_date) or today_local_date()).strftime("%Y-%m-%d")
@@ -2966,52 +2676,128 @@ def collect_home_source_day_articles(selected_date, source_domain_filter=""):
 
     return collected
 
+def latest_fallback_articles(mode="home", query=None, category=None, country_code="WORLD", source_domain_filter="", country_text=""):
+    latest_pool = []
+    country_focus = effective_country_query_text(country_code, country_text)
+    rss_country_text = country_focus if safe_text(country_text).strip() else ""
+    latest_news_limit = adaptive_result_count(18, minimum_count=8)
+    latest_rss_limit = adaptive_result_count(24, minimum_count=10)
+
+    fallback_queries = []
+    if query:
+        fallback_queries.extend([query, f"{query} latest news", f"{query} headlines"])
+    if category:
+        base_query = CATEGORY_QUERY.get(category, category)
+        fallback_queries.extend([base_query, f"{base_query} latest news", f"{base_query} headlines"])
+    if not fallback_queries:
+        fallback_queries.extend(["top news", "breaking news", "latest news", "world headlines"])
+
+    seen_queries = set()
+    for fallback_query in fallback_queries:
+        fq = safe_text(fallback_query).strip()
+        if not fq or fq.lower() in seen_queries:
+            continue
+        seen_queries.add(fq.lower())
+        try:
+            latest_pool.extend(
+                newsapi_fetch(
+                    query=fq,
+                    category=category if mode == "category" else None,
+                    selected_date=None,
+                    max_results=latest_news_limit,
+                    source_domain_filter=source_domain_filter,
+                    country_text=country_focus
+                )
+            )
+        except Exception:
+            pass
+        if latest_pool:
+            break
+
+    try:
+        latest_pool.extend(
+            google_rss(
+                query=query if mode == "search" else None,
+                category=category if mode == "category" else None,
+                max_results=latest_rss_limit,
+                country_code=country_code,
+                source_domain_filter=source_domain_filter,
+                country_text=rss_country_text,
+                selected_date=None
+            )
+        )
+    except Exception:
+        pass
+
+    if mode == "home":
+        try:
+            latest_pool.extend(
+                collect_home_source_day_articles(today_local_date().strftime("%Y-%m-%d"), source_domain_filter=source_domain_filter)
+            )
+        except Exception:
+            pass
+
+    return sorted(
+        remove_duplicates([
+            item for item in latest_pool
+            if is_probable_real_article(item.get("title", ""), item.get("link", ""), item.get("description", ""))
+        ]),
+        key=lambda x: parse_any_datetime(x.get("published_iso")) or datetime.min,
+        reverse=True
+    )
+
 def fetch_daily_articles(mode="home", query=None, category=None, selected_date=None, country_code="WORLD", source_domain_filter="", country_text=""):
     target_date = parse_selected_date(selected_date) or today_local_date()
     target_date_text = target_date.strftime("%Y-%m-%d")
     typed_country = safe_text(country_text).strip()
     country_focus = effective_country_query_text(country_code, typed_country)
+    daily_news_limit = adaptive_result_count(DAILY_NEWS_MAX_RESULTS, minimum_count=18)
+    daily_rss_limit = adaptive_result_count(DAILY_RSS_MAX_RESULTS, minimum_count=15)
     # Dropdown country selection should use the selected locale feed directly.
     # Only explicit typed-country searches should be forced into the RSS query text.
     rss_country_text = country_focus if typed_country else ""
 
     collected = []
-
-    newsapi_articles = newsapi_fetch(
-        query=query,
-        category=category,
-        selected_date=target_date_text,
-        max_results=DAILY_NEWS_MAX_RESULTS,
-        source_domain_filter=source_domain_filter,
-        country_text=country_focus
-    )
-    collected.extend(filter_articles_by_exact_date(remove_duplicates(newsapi_articles), target_date_text))
-
-    rss_articles = google_rss(
-        query=query if mode == "search" else None,
-        category=category if mode == "category" else None,
-        max_results=DAILY_RSS_MAX_RESULTS,
-        country_code=country_code,
-        source_domain_filter=source_domain_filter,
-        country_text=rss_country_text,
-        selected_date=target_date_text
-    )
-    collected.extend(filter_articles_by_exact_date(remove_duplicates(rss_articles), target_date_text))
-
+    initial_fetches = {
+        "newsapi": lambda: newsapi_fetch(
+            query=query,
+            category=category,
+            selected_date=target_date_text,
+            max_results=daily_news_limit,
+            source_domain_filter=source_domain_filter,
+            country_text=country_focus
+        ),
+        "rss": lambda: google_rss(
+            query=query if mode == "search" else None,
+            category=category if mode == "category" else None,
+            max_results=daily_rss_limit,
+            country_code=country_code,
+            source_domain_filter=source_domain_filter,
+            country_text=rss_country_text,
+            selected_date=target_date_text
+        ),
+    }
     if mode == "home":
-        collected.extend(
-            filter_articles_by_exact_date(
-                remove_duplicates(collect_home_source_day_articles(target_date_text, source_domain_filter=source_domain_filter)),
-                target_date_text
-            )
+        initial_fetches["home_sources"] = lambda: collect_home_source_day_articles(
+            target_date_text,
+            source_domain_filter=source_domain_filter
         )
+
+    with ThreadPoolExecutor(max_workers=min(INITIAL_FETCH_MAX_WORKERS, len(initial_fetches))) as executor:
+        future_map = {executor.submit(fetcher): name for name, fetcher in initial_fetches.items()}
+        for future in as_completed(future_map):
+            try:
+                items = future.result() or []
+            except Exception:
+                items = []
+            collected.extend(filter_articles_by_exact_date(remove_duplicates(items), target_date_text))
 
     if mode == "home" and not collected:
         for fallback_query in ["top news", "breaking news", "world news", "latest headlines"]:
             fallback_newsapi = newsapi_fetch(
                 query=fallback_query,
                 selected_date=target_date_text,
-                max_results=30,
+                max_results=adaptive_result_count(30, minimum_count=12),
                 source_domain_filter=source_domain_filter,
                 country_text=country_focus
             )
@@ -3025,7 +2811,7 @@ def fetch_daily_articles(mode="home", query=None, category=None, selected_date=N
                 query=climate_query,
                 category="climate",
                 selected_date=target_date_text,
-                max_results=40,
+                max_results=adaptive_result_count(40, minimum_count=15),
                 source_domain_filter=source_domain_filter,
                 country_text=""
             )
@@ -3034,7 +2820,7 @@ def fetch_daily_articles(mode="home", query=None, category=None, selected_date=N
             climate_world_rss = google_rss(
                 query=climate_query,
                 category=None,
-                max_results=40,
+                max_results=adaptive_result_count(40, minimum_count=15),
                 country_code="WORLD",
                 source_domain_filter=source_domain_filter,
                 country_text="",
@@ -3066,7 +2852,7 @@ def fetch_daily_articles(mode="home", query=None, category=None, selected_date=N
             fallback_articles = newsapi_fetch(
                 query=fq,
                 selected_date=target_date_text,
-                max_results=35,
+                max_results=adaptive_result_count(35, minimum_count=12),
                 source_domain_filter=source_domain_filter,
                 country_text=country_focus
             )
@@ -3094,7 +2880,7 @@ def fetch_daily_articles(mode="home", query=None, category=None, selected_date=N
                 rss_items = google_rss(
                     query=fq,
                     category=None,
-                    max_results=20,
+                    max_results=adaptive_result_count(20, minimum_count=10),
                     country_code=country_code,
                     source_domain_filter=source_domain_filter,
                     country_text=rss_country_text,
@@ -3105,6 +2891,16 @@ def fetch_daily_articles(mode="home", query=None, category=None, selected_date=N
             collected.extend(filter_articles_by_exact_date(remove_duplicates(rss_items), target_date_text))
             if len(remove_duplicates(collected)) >= 12:
                 break
+
+    if mode == "category" and len(remove_duplicates(collected)) < 8:
+        category_feed_items = [
+            item for item in filter_articles_by_exact_date(
+                remove_duplicates(collect_home_source_day_articles(target_date_text, source_domain_filter=source_domain_filter)),
+                target_date_text
+            )
+            if article_matches_category(item, category)
+        ]
+        collected.extend(category_feed_items)
 
     if len(collected) < 6 and target_date < today_local_date():
         archive_source_order = []
@@ -3144,48 +2940,14 @@ def fetch_daily_articles(mode="home", query=None, category=None, selected_date=N
         reverse=True
     )
 
-    # If the user is on today's home feed and exact-day sources have not published
-    # enough items yet, search broader latest feeds but still keep only today's
-    # local-date headlines so yesterday's news never appears after midnight.
-    if not collected and mode == "home" and target_date == today_local_date():
-        latest_pool = []
-        for fallback_query in ["top news", "breaking news", "latest news", "world headlines"]:
-            try:
-                latest_pool.extend(
-                    newsapi_fetch(
-                        query=fallback_query,
-                        selected_date=None,
-                        max_results=18,
-                        source_domain_filter=source_domain_filter,
-                        country_text=country_focus
-                    )
-                )
-            except Exception:
-                pass
-            if latest_pool:
-                break
-
-        try:
-            latest_pool.extend(
-                google_rss(
-                    query=None,
-                    category=None,
-                    max_results=24,
-                    country_code=country_code,
-                    source_domain_filter=source_domain_filter,
-                    country_text=country_focus
-                )
-            )
-        except Exception:
-            pass
-
-        collected = sorted(
-            filter_articles_by_exact_date(remove_duplicates([
-                item for item in latest_pool
-                if is_probable_real_article(item.get("title", ""), item.get("link", ""), item.get("description", ""))
-            ]), target_date_text),
-            key=lambda x: parse_any_datetime(x.get("published_iso")) or datetime.min,
-            reverse=True
+    if not collected and target_date == today_local_date():
+        collected = latest_fallback_articles(
+            mode=mode,
+            query=query,
+            category=category,
+            country_code=country_code,
+            source_domain_filter=source_domain_filter,
+            country_text=country_text
         )
 
     return collected
@@ -3324,15 +3086,16 @@ def build_sentiment_trend(topic: str, anchor_date: datetime, source_domain_filte
 
 def build_dashboard(mode="home", query=None, category=None, selected_date=None):
     uid = current_user_id()
+    network_profile = current_network_profile()
     dashboard_cache_key = f"dashboard_v4::{CACHE_VERSION}::{uid}::{mode}::{query}::{category}::{selected_date}::{session.get('selected_country','WORLD')}::{session.get('selected_source','')}::{session.get('typed_country','')}"
     cached_dashboard = get_cache(dashboard_cache_key)
-    if cached_dashboard is not None:
+    if cached_dashboard is not None and cached_dashboard.get("articles"):
         user_saved_rows = get_saved(uid) if uid else []
         refreshed = dict(cached_dashboard)
         refreshed["latest_saved"] = list(user_saved_rows[:3]) if user_saved_rows else []
         refreshed["activity"] = get_activity_summary(default_category=(category.capitalize() if category else "Technology"))
         refreshed["ai_recommendations"] = build_ai_recommendations(
-            refreshed.get("articles", []),
+            refreshed.get("articles", [])[:18],
             category=category or query or ""
         )
         refreshed["quick_stats"] = dict(refreshed.get("quick_stats", {}))
@@ -3366,7 +3129,8 @@ def build_dashboard(mode="home", query=None, category=None, selected_date=None):
     articles = remove_duplicates(articles)
 
     if not selected_date:
-        articles = filter_today_news(articles)
+        today_articles = filter_today_news(articles)
+        articles = today_articles or articles
     else:
         articles = filter_articles_by_exact_date(articles, selected_date)
 
@@ -3380,15 +3144,10 @@ def build_dashboard(mode="home", query=None, category=None, selected_date=None):
 
     # BREAKING ALERT
     try:
-        breaking_alert = build_breaking_alert(articles)
+        breaking_alert = build_breaking_alert(articles) if articles else None
     except Exception:
         breaking_alert = None
-    smart_alert = build_smart_alert(articles)
-
-    # TEMP HIDE (ONLY ONE TIME)
-    dismissed = session.pop("dismiss_breaking", False)
-    if dismissed:
-        breaking_alert = None
+    smart_alert = build_smart_alert(articles) if articles else None
 
     # REMOVE BREAKING FROM MAIN LIST
     if breaking_alert and isinstance(breaking_alert, dict) and breaking_alert.get("headline_links"):
@@ -3399,11 +3158,16 @@ def build_dashboard(mode="home", query=None, category=None, selected_date=None):
             filtered_articles = remaining
 
     live_summary_budget = min(len(filtered_articles), DASHBOARD_SUMMARY_FETCH_LIMIT)
+    if network_profile == "slow":
+        live_summary_budget = 0
+    elif network_profile == "normal":
+        live_summary_budget = min(live_summary_budget, 1)
     filtered_articles = enrich_article_summaries(filtered_articles, live_fetch_budget=live_summary_budget)
 
     # ALWAYS OUTSIDE
     highlights = filtered_articles[:3]
     calc_items = filtered_articles[:12]
+    analysis_items = filtered_articles[:18]
 
     headline_counts = make_counts(calc_items, "headline_sentiment")
     public_counts = make_counts(calc_items, "public_sentiment")
@@ -3417,7 +3181,7 @@ def build_dashboard(mode="home", query=None, category=None, selected_date=None):
         "saved_count": len(user_saved_rows),
     }
 
-    trending_topics = extract_trending_topics(filtered_articles, top_n=5)
+    trending_topics = extract_trending_topics(analysis_items, top_n=5)
 
     # DATE
     if selected_date:
@@ -3437,15 +3201,16 @@ def build_dashboard(mode="home", query=None, category=None, selected_date=None):
 
     activity = get_activity_summary(default_category=(category.capitalize() if category else "Technology"))
 
+    allow_heavy_analytics = network_profile == "fast"
     sentiment_trend = None
-    if mode == "search" and query and len(query.strip()) >= 3:
+    if allow_heavy_analytics and mode == "search" and query and len(query.strip()) >= 3:
         sentiment_trend = build_sentiment_trend(query, dt, source_domain_filter=source_domain_filter)
 
-    popularity = build_topic_popularity(filtered_articles, query=query if mode == "search" else "")
-    ai_recommendations = build_ai_recommendations(filtered_articles, category=category or query or "")
+    popularity = build_topic_popularity(analysis_items, query=query if mode == "search" else "")
+    ai_recommendations = build_ai_recommendations(analysis_items, category=category or query or "")
     source_comparison = None
-    if mode == "search" and query and len(query.strip()) >= 2:
-        source_comparison = build_source_comparison(filtered_articles, topic=query)
+    if allow_heavy_analytics and mode == "search" and query and len(query.strip()) >= 2:
+        source_comparison = build_source_comparison(analysis_items, topic=query)
 
     bias_counts = Counter(a.get("bias", "Neutral") for a in calc_items)
 
@@ -3483,285 +3248,247 @@ def build_dashboard(mode="home", query=None, category=None, selected_date=None):
             "neutral": bias_counts.get("Neutral", 0),
             "sensational": bias_counts.get("Sensational", 0),
         },
-        "auto_refresh_seconds": 60,
+        "auto_refresh_seconds": 45 if network_profile == "fast" else 60 if network_profile == "normal" else 120,
     }
 
-    set_cache(dashboard_cache_key, result)
+    if filtered_articles:
+        set_cache(dashboard_cache_key, result)
     return result
 
 def fetch_source_articles(query, selected_date=None):
     source_key = safe_text(query).replace("%20", " ").strip().lower()
     domain = resolve_source_domain(source_key)
-    domain_candidates = source_domain_candidates(domain)
-    source_phrase = SOURCE_QUERY_MAP.get(domain, source_key.replace(".", " "))
+    domain_candidates = source_domain_candidates(domain) or [domain]
+    source_phrase = safe_text(SOURCE_QUERY_MAP.get(domain, source_display_name(domain) or source_key.replace(".", " "))).strip()
     selected_day = parse_selected_date(selected_date)
+    target_date_text = (selected_day or today_local_date()).strftime("%Y-%m-%d")
+    source_news_limit = min(adaptive_result_count(18, minimum_count=8), 18)
+    source_target_count = min(source_news_limit, 12)
+    source_scan_limit = max(source_news_limit, 60 if selected_day else 24)
     cache_key = f"source_v4::{CACHE_VERSION}::{domain}::{selected_date or now_local().strftime('%Y-%m-%d')}"
     cached = get_cache(cache_key)
     if cached is not None:
         return cached
 
-    from_dt, to_dt = local_day_bounds_for_api(selected_date)
-    params = {
-        "domains": ",".join(domain_candidates) if domain_candidates else domain,
-        "language": "en",
-        "sortBy": "publishedAt",
-        "pageSize": NEWSAPI_PAGE_SIZE,
-        "from": from_dt,
-        "to": to_dt,
-        "apiKey": API_KEY,
-    }
-
-    saved_links = current_saved_links()
-    articles = []
-    target_date_text = (selected_day or today_local_date()).strftime("%Y-%m-%d")
-    source_page_target_count = min(SOURCE_PAGE_MAX_RESULTS, 18)
-    source_has_direct_feed = bool(SOURCE_FEED_MAP.get(domain))
-    feed_articles = [
-        item for item in source_feed_articles(domain, selected_date=target_date_text, max_results=SOURCE_PAGE_MAX_RESULTS)
-        if is_probable_real_article(item.get("title", ""), item.get("link", ""), item.get("description", ""))
-    ]
-    articles.extend(feed_articles)
-
-    def append_newsapi_results(payload):
-        for item in payload.get("articles", []):
-            published_raw = item.get("publishedAt")
-            published_dt = parse_any_datetime(published_raw)
-            if not article_matches_date(published_dt, selected_date):
-                continue
-
-            title = safe_text(item.get("title", ""))
-            description = safe_text(item.get("description", ""))
-            content = safe_text(item.get("content", ""))
-            link = safe_text(item.get("url", ""))
-            image_url = safe_text(item.get("urlToImage", ""))
-
-            if not title or not link:
-                continue
-            if not is_probable_real_article(title, link, description):
-                continue
-
-            if not article_matches_source_domain({"source": publisher_domain(title, link), "link": link}, domain):
-                title_check = title.lower()
-                phrase_check = source_phrase.lower()
-                if phrase_check not in title_check and source_key not in title_check:
-                    continue
-
-            articles.append(
-                process_article_common(
-                    title=title,
-                    description=description,
-                    content=content,
-                    link=resolve_article_url(link),
-                    source_domain=domain,
-                    saved_links=saved_links,
-                    category="general",
-                    published_raw=published_raw,
-                    image_url=image_url,
-                    allow_live_summary_fetch=False,
-                )
+    def filter_source_items(items, required_date):
+        matched = []
+        for item in remove_duplicates(items or []):
+            published_dt = parse_any_datetime(
+                item.get("published_iso")
+                or item.get("published_raw")
+                or item.get("published")
             )
-
-    if len(remove_duplicates(articles)) < source_page_target_count:
-        for page_number in range(1, NEWSAPI_MAX_PAGES + 1):
-            try:
-                page_params = dict(params)
-                page_params["page"] = page_number
-                response = http_get("https://newsapi.org/v2/everything", params=page_params, timeout=3.5)
-                payload = response.json()
-                append_newsapi_results(payload)
-                if len((payload or {}).get("articles", []) or []) < NEWSAPI_PAGE_SIZE:
-                    break
-                if len(remove_duplicates(articles)) >= SOURCE_PAGE_MAX_RESULTS:
-                    break
-            except Exception:
-                break
-
-    if len(remove_duplicates(articles)) < source_page_target_count:
-        source_aliases = [alias for alias, mapped_domain in SOURCE_ROUTE_DOMAIN_MAP.items() if mapped_domain == domain]
-        fallback_queries = [source_phrase, source_key.replace(".", " "), source_display_name(domain)]
-        fallback_queries.extend(source_aliases[:3])
-        if domain == "in.mashable.com":
-            fallback_queries.extend(["Mashable", "Mashable India tech"])
-        if domain == "zdnet.com":
-            fallback_queries.extend(["ZDNET", "ZD Net"])
-        fallback_queries.extend([f"{source_phrase} news", f"{source_phrase} headlines"])
-        seen_fallbacks = set()
-        for fallback_query in fallback_queries:
-            fq = safe_text(fallback_query).strip()
-            if not fq or fq.lower() in seen_fallbacks:
+            if required_date and not article_matches_date(published_dt, required_date):
                 continue
-            seen_fallbacks.add(fq.lower())
-            try:
-                extra_articles = newsapi_fetch(
-                    query=fq,
-                    selected_date=target_date_text,
-                    max_results=18,
-                    source_domain_filter="",
-                    country_text=""
-                )
-            except Exception:
-                extra_articles = []
+            if not article_matches_source_domain(item, domain):
+                continue
+            if not is_probable_real_article(
+                item.get("title", ""),
+                item.get("link", ""),
+                item.get("description", "")
+            ):
+                continue
+            matched.append(item)
+        return matched
 
-            for item in extra_articles:
-                if article_matches_source_domain(item, domain) and is_probable_real_article(
-                    item.get("title", ""),
-                    item.get("link", ""),
-                    item.get("description", "")
-                ):
-                    articles.append(item)
-
-    if (not source_has_direct_feed) or len(remove_duplicates(articles)) < source_page_target_count:
-        rss_variants = []
-        rss_variants.extend(google_rss(
-            query=source_phrase,
-            category=None,
-            max_results=30,
-            country_code="WORLD",
-            source_domain_filter=domain,
-            country_text="",
-            selected_date=target_date_text
-        ))
-        rss_variants.extend(google_rss(
+    joined_domains = ",".join(domain_candidates)
+    primary_fetches = [
+        lambda: source_feed_articles(
+            domain,
+            selected_date=target_date_text,
+            max_results=source_scan_limit
+        ),
+        lambda: google_rss(
             query=None,
             category=None,
-            max_results=30,
+            max_results=source_scan_limit,
             country_code="WORLD",
             source_domain_filter=domain,
             country_text="",
             selected_date=target_date_text
-        ))
-        for site_domain in domain_candidates or [domain]:
-            rss_variants.extend(google_rss(
-                query=f"site:{site_domain}",
+        ),
+    ]
+
+    if source_phrase:
+        primary_fetches.append(
+            lambda phrase=source_phrase: google_rss(
+                query=phrase,
                 category=None,
-                max_results=20,
-                country_code="WORLD",
-                source_domain_filter="",
-                country_text="",
-                selected_date=target_date_text
-            ))
-        if source_phrase and source_phrase != source_key:
-            rss_variants.extend(google_rss(
-                query=source_key.replace(".", " "),
-                category=None,
-                max_results=20,
+                max_results=min(source_scan_limit, 40),
                 country_code="WORLD",
                 source_domain_filter=domain,
                 country_text="",
                 selected_date=target_date_text
-            ))
-            rss_variants.extend(google_rss(
-                query=f"{source_phrase} news",
+            )
+        )
+        primary_fetches.append(
+            lambda phrase=source_phrase: newsapi_fetch(
+                query=phrase,
+                selected_date=target_date_text,
+                max_results=min(source_scan_limit, 30),
+                source_domain_filter=joined_domains,
+                country_text=""
+            )
+        )
+
+    articles = []
+    max_workers = max(1, min(4, len(primary_fetches)))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(fetch_fn) for fetch_fn in primary_fetches]
+        for future in as_completed(futures):
+            try:
+                articles.extend(filter_source_items(future.result() or [], target_date_text))
+            except Exception:
+                continue
+
+    if len(remove_duplicates(articles)) < source_target_count and source_phrase:
+        broad_fetches = [
+            lambda phrase=source_phrase: google_rss(
+                query=phrase,
                 category=None,
-                max_results=20,
+                max_results=min(source_scan_limit, 40),
                 country_code="WORLD",
                 source_domain_filter="",
                 country_text="",
                 selected_date=target_date_text
-            ))
-
-        rss_articles = [
-            item for item in filter_articles_by_exact_date(remove_duplicates(rss_variants), target_date_text)
-            if article_matches_source_domain(item, domain)
-            and is_probable_real_article(item.get("title", ""), item.get("link", ""), item.get("description", ""))
+            ),
+            lambda phrase=source_phrase: newsapi_fetch(
+                query=phrase,
+                selected_date=target_date_text,
+                max_results=min(source_scan_limit, 30),
+                source_domain_filter="",
+                country_text=""
+            ),
         ]
+        display_phrase = safe_text(source_display_name(domain)).strip()
+        if display_phrase and display_phrase.lower() != source_phrase.lower():
+            broad_fetches.append(
+                lambda phrase=display_phrase: google_rss(
+                    query=phrase,
+                    category=None,
+                    max_results=min(source_scan_limit, 30),
+                    country_code="WORLD",
+                    source_domain_filter="",
+                    country_text="",
+                    selected_date=target_date_text
+                )
+            )
 
-        articles.extend(rss_articles)
+        with ThreadPoolExecutor(max_workers=max(1, min(3, len(broad_fetches)))) as executor:
+            futures = [executor.submit(fetch_fn) for fetch_fn in broad_fetches]
+            for future in as_completed(futures):
+                try:
+                    articles.extend(filter_source_items(future.result() or [], target_date_text))
+                except Exception:
+                    continue
+
     articles = sorted(
         remove_duplicates(articles),
         key=lambda x: parse_any_datetime(x.get("published_iso")) or datetime.min,
         reverse=True
-    )
+    )[:source_news_limit]
 
-    if len(articles) < 4 and not selected_day:
-        latest_fallbacks = []
-        for fallback_query in [source_phrase, source_display_name(domain), source_key.replace(".", " "), f"site:{domain}"]:
-            fq = safe_text(fallback_query).strip()
-            if not fq:
-                continue
-            try:
-                latest_fallbacks.extend(
-                    newsapi_fetch(
-                        query=fq,
-                        selected_date=None,
-                        max_results=10,
-                        source_domain_filter="",
-                        country_text=""
-                    )
+    if len(articles) < source_target_count:
+        fallback_fetches = [
+            lambda: source_feed_articles(
+                domain,
+                selected_date=None,
+                max_results=max(24, source_news_limit)
+            ),
+            lambda: google_rss(
+                query=source_phrase or None,
+                category=None,
+                max_results=max(24, source_news_limit),
+                country_code="WORLD",
+                source_domain_filter=domain,
+                country_text="",
+                selected_date=None
+            ),
+        ]
+        if source_phrase:
+            fallback_fetches.append(
+                lambda phrase=source_phrase: newsapi_fetch(
+                    query=phrase,
+                    selected_date=None,
+                    max_results=max(18, source_news_limit),
+                    source_domain_filter=joined_domains,
+                    country_text=""
                 )
-            except Exception:
-                pass
-        for site_domain in domain_candidates or [domain]:
-            try:
-                latest_fallbacks.extend(
-                    google_rss(
-                        query=f"site:{site_domain}",
-                        category=None,
-                        max_results=15,
-                        country_code="WORLD",
-                        source_domain_filter="",
-                        country_text=""
-                    )
-                )
-            except Exception:
-                pass
-        latest_fallbacks.extend(source_feed_articles(domain, selected_date=None, max_results=15))
-        articles.extend([
-            item for item in filter_articles_by_exact_date(remove_duplicates(latest_fallbacks), target_date_text)
-            if article_matches_source_domain(item, domain)
-            and is_probable_real_article(item.get("title", ""), item.get("link", ""), item.get("description", ""))
-        ])
+            )
+
+        with ThreadPoolExecutor(max_workers=max(1, min(4, len(fallback_fetches)))) as executor:
+            futures = [executor.submit(fetch_fn) for fetch_fn in fallback_fetches]
+            for future in as_completed(futures):
+                try:
+                    articles.extend(filter_source_items(future.result() or [], target_date_text))
+                except Exception:
+                    continue
+
         articles = sorted(
             remove_duplicates(articles),
             key=lambda x: parse_any_datetime(x.get("published_iso")) or datetime.min,
             reverse=True
-        )[:SOURCE_PAGE_MAX_RESULTS]
+        )[:source_news_limit]
 
-    articles = enrich_article_summaries(articles, live_fetch_budget=min(len(articles), SOURCE_SUMMARY_FETCH_LIMIT))
+    source_summary_budget = 1 if articles else 0
+    articles = enrich_article_summaries(articles, live_fetch_budget=source_summary_budget)
 
-    set_cache(cache_key, articles)
+    if articles:
+        set_cache(cache_key, articles)
     return articles
+
+@app.route("/api/article-excerpt")
+def api_article_excerpt():
+    link = request.args.get("link", "").strip()
+    if not link:
+        return jsonify({"ok": False, "error": "Missing article link."}), 400
+    try:
+        excerpt = fetch_article_text_excerpt(link)
+        preview = build_content_preview(excerpt, max_words=140)
+        if not preview:
+            return jsonify({
+                "ok": False,
+                "error": "Readable article text is not available from this publisher."
+            }), 404
+        return jsonify({"ok": True, "content_preview": preview})
+    except Exception:
+        return jsonify({"ok": False, "error": "Unable to load article text right now."}), 500
 
 def article_matches_source_domain(article, domain: str) -> bool:
     domains = source_domain_candidates(domain)
     if not domains:
         return False
     source = safe_text(article.get("source", "") or article.get("source_name", "")).strip().lower()
-    link = safe_text(article.get("link", "")).strip().lower()
-    title = safe_text(article.get("title", "")).strip().lower()
-    description = safe_text(article.get("description", "") or article.get("ai_summary", "")).strip().lower()
-    display_name = safe_text(source_display_name(domain)).strip().lower()
-    normalized_display = normalize_source_key(display_name)
+    link = resolve_article_url(safe_text(article.get("link", "")).strip())
+    link_domain = get_domain(link)
+    display_name = normalize_source_key(source_display_name(domain))
     normalized_source = normalize_source_key(source)
-    normalized_title = normalize_source_key(title)
-    normalized_desc = normalize_source_key(description)
-    source_aliases = [alias for alias, mapped_domain in SOURCE_ROUTE_DOMAIN_MAP.items() if mapped_domain == domain]
-    if normalized_display and normalized_source and (
-        normalized_display in normalized_source or normalized_source in normalized_display
-    ):
-        return True
-    if normalized_display and (
-        normalized_display in normalized_title
-        or normalized_display in normalized_desc
-    ):
-        return True
-    for alias in source_aliases:
-        norm_alias = normalize_source_key(alias)
-        if norm_alias and (
-            norm_alias in normalized_source
-            or norm_alias in normalized_title
-            or norm_alias in normalized_desc
-        ):
-            return True
+    title_publisher = normalize_source_key(publisher_from_title(safe_text(article.get("title", ""))))
+    source_aliases = {
+        normalize_source_key(alias)
+        for alias, mapped_domain in SOURCE_ROUTE_DOMAIN_MAP.items()
+        if mapped_domain == domain
+    }
+    source_aliases.discard("")
+
     for item_domain in domains:
-        if (
-            source == item_domain
-            or source.endswith("." + item_domain)
-            or item_domain in source
-            or item_domain in link
-            or (display_name and display_name in title and item_domain.split(".")[0] in title)
-        ):
+        if link_domain == item_domain or link_domain.endswith("." + item_domain):
             return True
+        if source == item_domain or source.endswith("." + item_domain):
+            return True
+
+    if display_name and normalized_source and (
+        normalized_source == display_name or display_name in normalized_source
+    ):
+        return True
+
+    if title_publisher and (title_publisher == display_name or title_publisher in source_aliases):
+        return True
+
+    for alias in source_aliases:
+        if alias and normalized_source and alias in normalized_source:
+            return True
+
     return False
 
 def build_trusted_source_sections(selected_date=None, enable_direct_fetch=True):
@@ -3770,6 +3497,7 @@ def build_trusted_source_sections(selected_date=None, enable_direct_fetch=True):
     cached = get_cache(cache_key)
     if cached is not None:
         return cached
+    preview_limit = adaptive_result_count(80, minimum_count=24)
 
     try:
         home_articles = build_dashboard(mode="home", selected_date=selected_date).get("articles", [])
@@ -3787,10 +3515,11 @@ def build_trusted_source_sections(selected_date=None, enable_direct_fetch=True):
                 google_rss(
                     query=query_cfg.get("query"),
                     category=query_cfg.get("category"),
-                    max_results=80,
+                    max_results=preview_limit,
                     country_code="WORLD",
                     source_domain_filter="",
-                    country_text=""
+                    country_text="",
+                    selected_date=target_date
                 )
             )
         except Exception:
@@ -3883,7 +3612,8 @@ def build_trusted_source_sections(selected_date=None, enable_direct_fetch=True):
             "headlines": deduped_headlines[:10],
         })
 
-    set_cache(cache_key, sections)
+    if any(section.get("headlines") for section in sections):
+        set_cache(cache_key, sections)
     return sections
 
 def source_feed_articles(domain, selected_date=None, max_results=40):
@@ -3891,7 +3621,8 @@ def source_feed_articles(domain, selected_date=None, max_results=40):
     if not feed_urls:
         return []
 
-    cache_key = f"sourcefeeds::{CACHE_VERSION}::{domain}::{selected_date or now_local().strftime('%Y-%m-%d')}::{max_results}"
+    cache_date_key = selected_date or "latest"
+    cache_key = f"sourcefeeds::{CACHE_VERSION}::{domain}::{cache_date_key}::{max_results}"
     cached = get_cache(cache_key)
     if cached is not None:
         return cached
@@ -3899,12 +3630,8 @@ def source_feed_articles(domain, selected_date=None, max_results=40):
     saved_links = current_saved_links()
     collected = []
 
-    for feed_url in feed_urls:
-        try:
-            feed = fetch_feed_with_timeout(feed_url)
-        except Exception:
-            continue
-
+    def parse_feed_entries(feed):
+        items = []
         for entry in getattr(feed, "entries", [])[:max_results]:
             title = safe_text(getattr(entry, "title", ""))
             raw_summary = getattr(entry, "summary", "") or getattr(entry, "description", "")
@@ -3920,10 +3647,10 @@ def source_feed_articles(domain, selected_date=None, max_results=40):
 
             if not title or not link:
                 continue
-            if not article_matches_date(published_dt, selected_date):
+            if selected_date and not article_matches_date(published_dt, selected_date):
                 continue
 
-            collected.append(
+            items.append(
                 process_article_common(
                     title=title,
                     description=description,
@@ -3937,1022 +3664,48 @@ def source_feed_articles(domain, selected_date=None, max_results=40):
                     allow_live_summary_fetch=False,
                 )
             )
+        return items
+
+    max_workers = max(1, min(4, len(feed_urls)))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(fetch_feed_with_timeout, feed_url) for feed_url in feed_urls]
+        for future in as_completed(futures):
+            try:
+                collected.extend(parse_feed_entries(future.result()))
+            except Exception:
+                continue
 
     collected = sorted(
         remove_duplicates(collected),
         key=lambda x: parse_any_datetime(x.get("published_iso")) or datetime.min,
         reverse=True
     )
-    set_cache(cache_key, collected)
+    if collected:
+        set_cache(cache_key, collected)
     return collected
 
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if current_user():
-        return redirect("/")
-
-    if request.method == "POST":
-        email = safe_text(request.form.get("email")).strip().lower()
-        password = safe_text(request.form.get("password")).strip()
-        remember = request.form.get("remember_me")
-
-        user = get_user_by_email(email) if email else None
-        if not user or not check_password_hash(user["password_hash"], password):
-            return render_auth_page(
-                "login.html",
-                page_error="Invalid email or password.",
-                prefill_email=email,
-                remember_checked=bool(remember)
-            )
-
-        return complete_login(user, bool(remember))
-
-    remembered_email = request.cookies.get("remembered_email", "")
-    return render_auth_page("login.html", prefill_email=remembered_email, remember_checked=bool(remembered_email))
-
-@app.route("/social-login/<provider>", methods=["GET", "POST"])
-def social_login(provider):
-    provider = safe_text(provider).strip().lower()
-    if provider not in {"google", "microsoft"}:
-        return redirect("/login")
-
-    if current_user():
-        return redirect("/")
-
-    provider_title = "Google" if provider == "google" else "Microsoft"
-    provider_icon = "google" if provider == "google" else "microsoft"
-
-    if request.method == "POST":
-        name = safe_text(request.form.get("name")).strip()
-        email = safe_text(request.form.get("email")).strip().lower()
-
-        if not email:
-            return render_auth_page(
-                "social_login.html",
-                page_error="Please enter your email to continue.",
-                prefill_name=name,
-                prefill_email=email,
-                provider=provider,
-                provider_title=provider_title,
-                provider_icon=provider_icon
-            )
-
-        user = get_user_by_email(email)
-        if not user:
-            if not name:
-                return render_auth_page(
-                    "social_login.html",
-                    page_error="Please enter your name to create a new account.",
-                    prefill_name=name,
-                    prefill_email=email,
-                    provider=provider,
-                    provider_title=provider_title,
-                    provider_icon=provider_icon
-                )
-            should_be_admin = False
-            if ADMIN_EMAIL and email == ADMIN_EMAIL:
-                should_be_admin = True
-            elif not get_all_users():
-                should_be_admin = True
-            user_id = create_user(
-                name=name,
-                email=email,
-                password_hash=generate_password_hash(secrets.token_urlsafe(24)),
-                created_at=datetime.now().strftime("%d-%m-%Y %I:%M %p"),
-                is_admin=1 if should_be_admin else 0
-            )
-            log_activity(user_id, "signup", f"{provider_title} quick sign-in created account for {email}", now_local().strftime("%d-%m-%Y %I:%M %p"))
-            user = get_user_by_id(user_id)
-        else:
-            log_activity(user["id"], "social_login", f"Signed in with {provider_title}", now_local().strftime("%d-%m-%Y %I:%M %p"))
-
-        return complete_login(user)
-
-    return render_auth_page(
-        "social_login.html",
-        provider=provider,
-        provider_title=provider_title,
-        provider_icon=provider_icon
-    )
-
-@app.route("/signup", methods=["GET", "POST"])
-def signup():
-    if current_user():
-        return redirect("/")
-
-    if request.method == "POST":
-        name = safe_text(request.form.get("name")).strip()
-        email = safe_text(request.form.get("email")).strip().lower()
-        password = safe_text(request.form.get("password")).strip()
-        confirm_password = safe_text(request.form.get("confirm_password")).strip()
-
-        if not name or not email or not password or not confirm_password:
-            return render_auth_page(
-                "signup.html",
-                page_error="Please fill all fields.",
-                prefill_name=name,
-                prefill_email=email
-            )
-
-        if password != confirm_password:
-            return render_auth_page(
-                "signup.html",
-                page_error="Passwords do not match.",
-                prefill_name=name,
-                prefill_email=email
-            )
-
-        if not is_strong_password(password):
-            return render_auth_page(
-                "signup.html",
-                page_error=PASSWORD_RULE_TEXT,
-                prefill_name=name,
-                prefill_email=email
-            )
-
-        if get_user_by_email(email):
-            return render_auth_page(
-                "signup.html",
-                page_error="An account with this email already exists.",
-                prefill_name=name,
-                prefill_email=email
-            )
-
-        should_be_admin = False
-        if ADMIN_EMAIL and email == ADMIN_EMAIL:
-            should_be_admin = True
-        elif not get_all_users():
-            should_be_admin = True
-
-        user_id = create_user(
-            name=name,
-            email=email,
-            password_hash=generate_password_hash(password),
-            created_at=datetime.now().strftime("%d-%m-%Y %I:%M %p"),
-            is_admin=1 if should_be_admin else 0
-        )
-        log_activity(user_id, "signup", f"Account created for {email}", now_local().strftime("%d-%m-%Y %I:%M %p"))
-        return render_auth_page(
-            "login.html",
-            page_success="Account created successfully. Please log in.",
-            prefill_email=email
-        )
-
-    return render_auth_page("signup.html")
-
-@app.route("/forgot-password", methods=["GET", "POST"])
-def forgot_password():
-    if request.method == "POST":
-        email = safe_text(request.form.get("email")).strip().lower()
-        if not email:
-            return render_auth_page(
-                "forgot_password.html",
-                page_error="Please enter your registered email.",
-                prefill_email=email
-            )
-
-        user = get_user_by_email(email)
-        if not user:
-            return render_auth_page(
-                "forgot_password.html",
-                page_error="No account found with that email. Please create an account first.",
-                prefill_email=email
-            )
-
-        otp_code = f"{secrets.randbelow(900000) + 100000}"
-        expires_at = (now_local() + timedelta(seconds=OTP_EXPIRY_SECONDS)).strftime("%Y-%m-%d %H:%M:%S")
-        store_password_reset_otp(email, otp_code, expires_at, now_local().strftime("%d-%m-%Y %I:%M %p"))
-
-        try:
-            send_reset_otp_email(email, otp_code)
-        except Exception as e:
-            return render_auth_page(
-                "forgot_password.html",
-                page_error=f"{safe_text(str(e)) or 'Unable to send OTP email right now.'}",
-                prefill_email=email
-            )
-
-        log_activity(user["id"], "password_reset_requested", f"OTP sent to {email}", now_local().strftime("%d-%m-%Y %I:%M %p"))
-        session.pop("password_reset_verified_email", None)
-        return render_auth_page(
-            "verify_otp.html",
-            page_success="OTP sent to your email. Verify it first, then create your new password.",
-            prefill_email=email,
-            otp_expires_seconds=OTP_EXPIRY_SECONDS,
-            otp_verified=False
-        )
-
-    return render_auth_page("forgot_password.html")
-
-@app.route("/verify-reset-otp", methods=["GET", "POST"])
-def verify_reset_otp():
-    if request.method == "POST":
-        email = safe_text(request.form.get("email")).strip().lower()
-        otp_code = safe_text(request.form.get("otp_code")).strip()
-
-        if not email or not otp_code:
-            return render_auth_page(
-                "verify_otp.html",
-                page_error="Please enter your email and OTP.",
-                prefill_email=email,
-                otp_expires_seconds=latest_otp_remaining_seconds(email),
-                otp_verified=False
-            )
-
-        otp_row = get_valid_password_reset_otp(email, otp_code)
-        if not otp_row:
-            remaining_seconds = latest_otp_remaining_seconds(email)
-            return render_auth_page(
-                "verify_otp.html",
-                page_error="Invalid OTP. Please try again." if remaining_seconds else "OTP has expired. Please request a new one.",
-                prefill_email=email,
-                otp_expires_seconds=remaining_seconds,
-                otp_verified=False
-            )
-
-        if otp_remaining_seconds(otp_row["expires_at"]) <= 0:
-            return render_auth_page(
-                "verify_otp.html",
-                page_error="OTP has expired. Please request a new one.",
-                prefill_email=email,
-                otp_expires_seconds=0,
-                otp_verified=False
-            )
-
-        session["password_reset_verified_email"] = email
-        return render_auth_page(
-            "reset_password.html",
-            page_success="OTP verified. Create your new password now.",
-            prefill_email=email
-        )
-
-    return render_auth_page("verify_otp.html")
-
-@app.route("/reset-password", methods=["POST"])
-def reset_password_after_otp():
-    email = safe_text(request.form.get("email")).strip().lower()
-    new_password = safe_text(request.form.get("new_password")).strip()
-    confirm_password = safe_text(request.form.get("confirm_password")).strip()
-
-    if not email or session.get("password_reset_verified_email") != email:
-        return render_auth_page(
-            "verify_otp.html",
-            page_error="Please verify your OTP first.",
-            prefill_email=email,
-            otp_expires_seconds=0,
-            otp_verified=False
-        )
-
-    if new_password != confirm_password:
-        return render_auth_page(
-            "reset_password.html",
-            page_error="Passwords do not match.",
-            prefill_email=email
-        )
-
-    if not is_strong_password(new_password):
-        return render_auth_page(
-            "reset_password.html",
-            page_error=PASSWORD_RULE_TEXT,
-            prefill_email=email
-        )
-
-    updated = update_user_password(
-        email,
-        generate_password_hash(new_password),
-        now_local().strftime("%d-%m-%Y %I:%M %p")
-    )
-    if not updated:
-        return render_auth_page(
-            "forgot_password.html",
-            page_error="No account found with that email. Please create an account first.",
-            prefill_email=email
-        )
-
-    user = get_user_by_email(email)
-    if user:
-        log_activity(user["id"], "password_reset_success", f"Password reset completed for {email}", now_local().strftime("%d-%m-%Y %I:%M %p"))
-    session.pop("password_reset_verified_email", None)
-    return render_auth_page(
-        "login.html",
-        page_success="Password updated successfully. Please log in.",
-        prefill_email=email
-    )
-
-@app.route("/resend-reset-otp", methods=["POST"])
-def resend_reset_otp():
-    email = safe_text(request.form.get("email")).strip().lower()
-    user = get_user_by_email(email) if email else None
-    if not user:
-        return render_auth_page(
-            "forgot_password.html",
-            page_error="No account found with that email. Please create an account first.",
-            prefill_email=email
-        )
-
-    otp_code = f"{secrets.randbelow(900000) + 100000}"
-    expires_at = (now_local() + timedelta(seconds=OTP_EXPIRY_SECONDS)).strftime("%Y-%m-%d %H:%M:%S")
-    store_password_reset_otp(email, otp_code, expires_at, now_local().strftime("%d-%m-%Y %I:%M %p"))
-
-    try:
-        send_reset_otp_email(email, otp_code)
-    except Exception as e:
-        return render_auth_page(
-            "verify_otp.html",
-            page_error=f"{safe_text(str(e)) or 'Unable to send OTP email right now.'}",
-            prefill_email=email,
-            otp_expires_seconds=latest_otp_remaining_seconds(email),
-            otp_verified=False
-        )
-
-    log_activity(user["id"], "password_reset_requested", f"OTP resent to {email}", now_local().strftime("%d-%m-%Y %I:%M %p"))
-    session.pop("password_reset_verified_email", None)
-    return render_auth_page(
-        "verify_otp.html",
-        page_success="A new OTP has been sent to your email.",
-        prefill_email=email,
-        otp_expires_seconds=OTP_EXPIRY_SECONDS,
-        otp_verified=False
-    )
-
-@app.route("/logout")
-def logout():
-    user = current_user()
-    if user:
-        log_activity(user["id"], "logout", "User logged out", now_local().strftime("%d-%m-%Y %I:%M %p"))
-    session.clear()
-    return redirect("/login")
-
-def build_profile_stats(user):
-    rows = get_user_activity_rows(1000)
-    saved_rows = get_saved(user["id"]) if user else []
-    today = today_local_date()
-    daily_seconds_map = {today - timedelta(days=offset): 0 for offset in range(6, -1, -1)}
-    daily_reading = []
-    search_counter = Counter()
-    category_counter = Counter()
-    total_searches = 0
-    total_seconds = 0
-
-    for row in rows:
-        event_type = safe_text(row["event_type"])
-        details = safe_text(row["details"])
-        row_dt = parse_activity_time(row["created_at"])
-        if event_type == "search":
-            term = details.replace("Searched topic:", "").strip()
-            if term:
-                search_counter[term] += 1
-                total_searches += 1
-        elif event_type == "category_view":
-            cat = details.replace("Opened category:", "").strip().title()
-            if cat:
-                category_counter[cat] += 1
-        elif event_type == "article_click":
-            cat = extract_detail_value(details, "category").strip().title()
-            if cat:
-                category_counter[cat] += 1
-        elif event_type == "reading_time":
-            try:
-                seconds = int(extract_detail_value(details, "seconds") or "0")
-            except Exception:
-                seconds = 0
-            total_seconds += seconds
-            if row_dt and row_dt.date() in daily_seconds_map:
-                daily_seconds_map[row_dt.date()] += seconds
-
-    for day, day_seconds in sorted(daily_seconds_map.items()):
-        daily_reading.append({
-            "date": day.strftime("%d %b"),
-            "time": format_seconds_compact(day_seconds),
-            "seconds": day_seconds,
-        })
-
-    return {
-        "created_at": user["created_at"] or "Not available",
-        "last_login_at": user["last_login_at"] or "Not yet",
-        "saved_count": len(saved_rows),
-        "search_count": total_searches,
-        "reading_time": format_seconds_compact(total_seconds) if total_seconds else "<1m",
-        "favorite_category": category_counter.most_common(1)[0][0] if category_counter else "Not enough activity yet",
-        "top_searched_topic": search_counter.most_common(1)[0][0] if search_counter else "No searches yet",
-        "most_searched": [{"topic": topic, "count": count} for topic, count in search_counter.most_common(5)],
-        "daily_reading": daily_reading,
-        "recent_saved": list(saved_rows[:5]),
-    }
-
-@app.route("/profile")
-def profile_page():
-    user = current_user()
-    if is_admin_user(user):
-        return redirect("/admin")
-    context = build_base_context(active="settings")
-    context.update({"profile_stats": build_profile_stats(user)})
-    return render_template("profile.html", **context)
-
-@app.route("/update-password", methods=["GET", "POST"])
-def update_password_page():
-    user = current_user()
-    page_error = ""
-    page_success = ""
-    if request.method == "POST":
-        current_password = safe_text(request.form.get("current_password")).strip()
-        new_password = safe_text(request.form.get("new_password")).strip()
-        confirm_password = safe_text(request.form.get("confirm_password")).strip()
-
-        if not current_password or not new_password or not confirm_password:
-            page_error = "Please fill all password fields."
-        elif not check_password_hash(user["password_hash"], current_password):
-            page_error = "Current password is incorrect."
-        elif new_password != confirm_password:
-            page_error = "New password and confirm password do not match."
-        elif not is_strong_password(new_password):
-            page_error = PASSWORD_RULE_TEXT
-        else:
-            update_user_password(
-                user["email"],
-                generate_password_hash(new_password),
-                now_local().strftime("%d-%m-%Y %I:%M %p")
-            )
-            log_user_event("password_change", "User updated password from profile menu")
-            page_success = "Password updated successfully."
-
-    context = build_base_context(active="settings")
-    context.update({
-        "page_error": page_error,
-        "page_success": page_success,
-        "password_rule_text": PASSWORD_RULE_TEXT,
-    })
-    return render_template("update_password.html", **context)
-
-@app.route("/settings", methods=["GET", "POST"])
-def settings_page():
-    if request.method == "POST":
-        action = safe_text(request.form.get("action")).strip()
-        if action == "delete_account":
-            user = current_user()
-            if user:
-                deactivate_user(user["id"], now_local().strftime("%d-%m-%Y %I:%M %p"))
-                log_activity(user["id"], "account_deactivated", "User deleted account", now_local().strftime("%d-%m-%Y %I:%M %p"))
-            session.clear()
-            return render_auth_page(
-                "signup.html",
-                page_success="Your account was deleted. Please create a new account if you want to use InformaX AI again."
-            )
-
-        if "default_country" in request.form:
-            selected_country = safe_text(request.form.get("default_country") or "WORLD").strip().upper()
-            if selected_country not in {cc for _, cc in COUNTRY_OPTIONS}:
-                selected_country = "WORLD"
-            session["selected_country"] = selected_country
-        theme_preference = safe_text(request.form.get("theme_preference") or "system").strip().lower()
-        if theme_preference not in {"light", "dark", "system"}:
-            theme_preference = "system"
-        session["theme_preference"] = theme_preference
-        if request.form.get("reset_preferences"):
-            session["selected_country"] = "WORLD"
-            session["selected_source"] = ""
-            session["typed_country"] = ""
-            session.pop("last_search_topic", None)
-        context = build_base_context(active="settings")
-        context.update({
-            "settings_saved": True,
-            "support_email": "informaxai.support@gmail.com",
-            "selected_theme_preference": session.get("theme_preference", "system"),
-        })
-        return render_template("settings.html", **context)
-
-    context = build_base_context(active="settings")
-    context.update({
-        "settings_saved": False,
-        "support_email": "informaxai.support@gmail.com",
-        "selected_theme_preference": session.get("theme_preference", "system"),
-    })
-    return render_template("settings.html", **context)
-
-@app.route("/help-support")
-def help_support_page():
-    context = build_base_context(active="help")
-    context.update({
-        "support_email": "informaxai.support@gmail.com",
-        "help_items": [
-            ("Why is an article marked Real, Fake, or Check?", "The app combines source reputation, article text analysis, and model confidence to assign a credibility label."),
-            ("How does date filtering work?", "Today is shown by default. If you pick a previous date, the app tries to fetch only that day's articles."),
-            ("Why do some trusted sources show fewer articles?", "That depends on what NewsAPI and RSS feeds publish or index for the selected day."),
-            ("How do saved articles work?", "Saved articles are linked to the logged-in user only, so one user cannot see another user's saved list."),
-        ]
-    })
-    return render_template("help_support.html", **context)
-
-def filter_rows_by_date(rows, selected_date=""):
-    if not selected_date:
-        return list(rows)
-    target = parse_selected_date(selected_date)
-    if not target:
-        return list(rows)
-    filtered = []
-    for row in rows:
-        dt = parse_activity_time(row["created_at"])
-        if dt and dt.date() == target:
-            filtered.append(row)
-    return filtered
-
-def filter_rows_by_date_field(rows, selected_date="", field_name="created_at"):
-    if not selected_date:
-        return list(rows)
-    target = parse_selected_date(selected_date)
-    if not target:
-        return list(rows)
-    filtered = []
-    for row in rows:
-        dt = parse_activity_time(row[field_name])
-        if dt and dt.date() == target:
-            filtered.append(row)
-    return filtered
-
-def format_seconds_compact(total_seconds):
-    seconds = max(0, int(total_seconds or 0))
-    if seconds < 60:
-        return "<1m"
-    minutes = seconds // 60
-    hours = minutes // 60
-    mins = minutes % 60
-    if hours:
-        return f"{hours}h {mins}m"
-    return f"{minutes}m"
-
-def activity_rows_in_window(rows, start_date, end_date):
-    filtered = []
-    for row in rows:
-        dt = parse_activity_time(row["created_at"])
-        if dt and start_date <= dt.date() <= end_date:
-            filtered.append(row)
-    return filtered
-
-def article_meta_from_rows(rows):
-    meta = {}
-    for row in rows:
-        if safe_text(row["event_type"]) != "article_click":
-            continue
-        details = safe_text(row["details"])
-        title = extract_detail_value(details, "title").strip()
-        if not title:
-            continue
-        meta[title.lower()] = {
-            "source": extract_detail_value(details, "source").strip() or "Unknown",
-            "category": extract_detail_value(details, "category").strip().title() or "General",
-        }
-    return meta
-
-@app.route("/admin/clear-activity", methods=["POST"])
-@admin_required
-def admin_clear_activity():
-    from db import get_conn
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM user_activity")
-    cur.execute("DELETE FROM password_reset_otp")
-    conn.commit()
-    conn.close()
-    CACHE.clear()
-    return redirect("/admin")
-
-@app.route("/admin/clear-users", methods=["POST"])
-@admin_required
-def admin_clear_users():
-    clear_admin_data(ADMIN_EMAIL)
-    CACHE.clear()
-    return redirect("/admin")
-
-@app.route("/admin")
-@admin_required
-def admin_dashboard():
-    admin_user = current_user()
-    all_users = get_all_users()
-    admin_ids = {int(u["id"]) for u in all_users if is_admin_user(u)}
-    users = [u for u in all_users if int(u["id"]) not in admin_ids]
-    active_user_ids = {int(u["id"]) for u in users if int(u["is_active"] if "is_active" in u.keys() else 1)}
-    today = today_local_date()
-    selected_date = (request.args.get("date") or today.strftime("%Y-%m-%d")).strip()
-    view_date = parse_selected_date(selected_date) or today
-    selected_date_text = view_date.strftime("%Y-%m-%d")
-    is_today_view = view_date == today
-    selected_date_title = "Today" if is_today_view else "Selected Date"
-    selected_date_textual = view_date.strftime("%A, %d %B %Y")
-    selected_date_lower = "today" if is_today_view else "the selected date"
-
-    all_activity_rows = get_recent_activity(5000)
-    activity_rows = [
-        r for r in all_activity_rows
-        if not (r["user_id"] and int(r["user_id"]) in admin_ids)
-    ]
-    view_activity_rows = filter_rows_by_date(activity_rows, selected_date_text)
-
-    seven_day_start = view_date - timedelta(days=6)
-    trend_rows = activity_rows_in_window(activity_rows, seven_day_start, view_date)
-    article_meta = article_meta_from_rows(activity_rows)
-
-    otp_rows_all = [
-        r for r in get_recent_password_reset_requests(300)
-        if safe_text(r["email"]).strip().lower() != safe_text(ADMIN_EMAIL)
-    ]
-    view_otp_rows = filter_rows_by_date(otp_rows_all, selected_date_text)
-
-    daily_labels = []
-    reading_trend_values = []
-    active_user_trend_values = []
-    for offset in range(7):
-        day = seven_day_start + timedelta(days=offset)
-        daily_labels.append(day.strftime("%d %b"))
-        day_rows = [r for r in trend_rows if (parse_activity_time(r["created_at"]) and parse_activity_time(r["created_at"]).date() == day)]
-        day_seconds = 0
-        active_users = set()
-        for row in day_rows:
-            if row["user_id"] and int(row["user_id"]) in active_user_ids:
-                active_users.add(int(row["user_id"]))
-            if safe_text(row["event_type"]) == "reading_time":
-                try:
-                    day_seconds += int(extract_detail_value(safe_text(row["details"]), "seconds") or "0")
-                except Exception:
-                    pass
-        reading_trend_values.append(round(day_seconds / 60, 1))
-        active_user_trend_values.append(len(active_users))
-
-    search_counter = Counter()
-    category_counter = Counter()
-    article_view_counter = Counter()
-    most_used_source_counter = Counter()
-    for row in view_activity_rows:
-        event_type = safe_text(row["event_type"])
-        details = safe_text(row["details"])
-        if event_type == "search":
-            search_term = details.replace("Searched topic:", "").strip()
-            if search_term:
-                search_counter[search_term] += 1
-        elif event_type == "category_view":
-            category_name = details.replace("Opened category:", "").strip().title()
-            if category_name:
-                category_counter[category_name] += 1
-        elif event_type == "article_click":
-            title = extract_detail_value(details, "title").strip()
-            source = extract_detail_value(details, "source").strip() or "Unknown"
-            category_name = extract_detail_value(details, "category").strip().title() or "General"
-            if title:
-                article_view_counter[title] += 1
-            category_counter[category_name] += 1
-            most_used_source_counter[source_display_name(source)] += 1
-
-    top_search_labels = [name for name, _ in search_counter.most_common(10)]
-    top_search_values = [count for _, count in search_counter.most_common(10)]
-    category_chart_labels = [name for name, _ in category_counter.most_common(8)]
-    category_chart_values = [count for _, count in category_counter.most_common(8)]
-
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT s.title, s.link, s.saved_at, u.id AS user_id, u.email
-        FROM user_saved_articles s
-        JOIN users u ON u.id = s.user_id
-        WHERE COALESCE(u.is_admin, 0) = 0
-        ORDER BY s.id DESC
-    """)
-    all_saved_rows = cur.fetchall()
-    conn.close()
-
-    view_saved_rows = filter_rows_by_date_field(all_saved_rows, selected_date_text, field_name="saved_at")
-    saved_counts = Counter()
-    saved_article_counter = Counter()
-    saved_article_latest_link = {}
-    for row in view_saved_rows:
-        email_key = safe_text(row["email"]).strip().lower()
-        title = safe_text(row["title"]).strip()
-        link = safe_text(row["link"]).strip()
-        if email_key:
-            saved_counts[email_key] += 1
-        if title:
-            saved_article_counter[title] += 1
-            if title not in saved_article_latest_link and link:
-                saved_article_latest_link[title] = link
-
-    most_viewed_articles = []
-    for title, views in article_view_counter.most_common(8):
-        meta = article_meta.get(title.lower(), {})
-        most_viewed_articles.append({
-            "title": title,
-            "views": views,
-            "source": source_display_name(meta.get("source", "")),
-            "category": meta.get("category", "General"),
-        })
-
-    most_saved_articles = []
-    for title, saves in saved_article_counter.most_common(8):
-        link = saved_article_latest_link.get(title, "")
-        meta = article_meta.get(safe_text(title).strip().lower(), {})
-        most_saved_articles.append({
-            "title": title,
-            "saves": int(saves or 0),
-            "source": source_display_name(meta.get("source", get_domain(link))),
-            "category": meta.get("category", "General"),
-        })
-
-    event_badge_map = {
-        "login": ("Login", "#1fd28a"),
-        "logout": ("Logout", "#ff7b72"),
-        "search": ("Search", "#4da3ff"),
-        "category_view": ("Category", "#9b6bff"),
-        "article_click": ("Read", "#00c2a8"),
-        "save_add": ("Save", "#ffb020"),
-        "save_remove": ("Remove", "#ff8a5b"),
-        "password_reset_requested": ("Reset", "#f06292"),
-        "password_reset_success": ("Reset", "#f06292"),
-        "page_view": ("Visit", "#7aa2ff"),
-    }
-    timeline_rows = []
-    for row in view_activity_rows[:20]:
-        label, color = event_badge_map.get(safe_text(row["event_type"]), (safe_text(row["event_type"]).replace("_", " ").title(), "#7aa2ff"))
-        timeline_rows.append({
-            "time": row["created_at"],
-            "user_name": row["user_name"] or "Unknown User",
-            "details": row["details"],
-            "label": label,
-            "color": color,
-        })
-
-    source_day_articles = []
-    try:
-        source_day_articles = fetch_articles(
-            mode="home",
-            query=None,
-            category=None,
-            selected_date=selected_date_text,
-            country_code="WORLD",
-            source_domain_filter="",
-            country_text=""
-        )
-        source_day_articles = filter_articles_by_exact_date(remove_duplicates(source_day_articles), selected_date_text)
-    except Exception:
-        source_day_articles = []
-
-    try:
-        trusted_sections_today = build_trusted_source_sections(
-            selected_date=selected_date_text,
-            enable_direct_fetch=False
-        )
-    except Exception:
-        trusted_sections_today = []
-
-    failed_sources = []
-    latest_only_sources = []
-    for section in trusted_sections_today:
-        category_name = safe_text(section.get("category", "")).strip()
-        for source in section.get("sources", []):
-            source_name = safe_text(source.get("name", "")).strip() or "Unknown Source"
-            source_status = {
-                "name": source_name,
-                "category": category_name,
-                "coverage_mode": safe_text(source.get("coverage_mode", "")).strip(),
-                "coverage_note": safe_text(source.get("coverage_note", "")).strip(),
-            }
-            if int(source.get("headline_count", 0) or 0) == 0:
-                failed_sources.append(source_status)
-            elif source_status["coverage_mode"] == "latest":
-                latest_only_sources.append(source_status)
-
-    failed_source_fetch_count = len(failed_sources)
-    failed_source_names_text = summarize_source_names([item["name"] for item in failed_sources], limit=8)
-    latest_only_names_text = summarize_source_names([item["name"] for item in latest_only_sources], limit=6)
-    failed_source_groups = group_source_names_by_category(failed_sources)
-    active_users_today = len({int(r["user_id"]) for r in view_activity_rows if r["user_id"] and int(r["user_id"]) in active_user_ids})
-    total_searches_today = sum(1 for r in view_activity_rows if safe_text(r["event_type"]) == "search")
-    total_reading_seconds_today = 0
-    for row in view_activity_rows:
-        if safe_text(row["event_type"]) == "reading_time":
-            try:
-                total_reading_seconds_today += int(extract_detail_value(safe_text(row["details"]), "seconds") or "0")
-            except Exception:
-                pass
-
-    active_alerts = []
-    if not API_KEY or API_KEY == "your_real_newsapi_key_here":
-        active_alerts.append({
-            "level": "warning",
-            "title": "NewsAPI needs configuration",
-            "detail": "The app can still use RSS and source fallbacks, but NewsAPI should be configured for stronger article coverage.",
-            "time": now_local().strftime("%I:%M %p")
-        })
-    if failed_source_fetch_count:
-        failed_sources_detail = f"These trusted sources did not return a matched headline for {selected_date_lower}."
-        if latest_only_sources:
-            failed_sources_detail += f" Latest fallback headlines were still found for {len(latest_only_sources)} sources."
-        active_alerts.append({
-            "level": "warning",
-            "title": f"{failed_source_fetch_count} trusted sources had no headlines for {selected_date_lower}",
-            "detail": failed_sources_detail,
-            "source_groups": failed_source_groups,
-            "time": now_local().strftime("%I:%M %p")
-        })
-    if not source_day_articles:
-        active_alerts.append({
-            "level": "danger",
-            "title": f"No articles fetched for {selected_date_lower}",
-            "detail": "The home feed for the selected date is empty, so users may see missing content until refresh succeeds.",
-            "time": now_local().strftime("%I:%M %p")
-        })
-    if len(view_otp_rows) >= 4:
-        active_alerts.append({
-            "level": "warning",
-            "title": f"Password reset requests are unusually high for {selected_date_lower}",
-            "detail": f"{len(view_otp_rows)} reset requests were recorded for {selected_date_lower}, which is above the alert threshold of 4.",
-            "time": now_local().strftime("%I:%M %p")
-        })
-    fake_count = sum(1 for a in source_day_articles if safe_text(a.get("label")) == "Fake")
-    check_count = sum(1 for a in source_day_articles if safe_text(a.get("label")) == "Check")
-    suspicious_count = fake_count + check_count
-    suspicious_threshold = max(8, int(math.ceil(len(source_day_articles) * 0.40))) if source_day_articles else 8
-    if suspicious_count >= suspicious_threshold or fake_count >= 3:
-        if fake_count == 0 and check_count:
-            suspicious_title = f"Many articles were marked Check for {selected_date_lower}"
-            suspicious_detail = (
-                f"This does not mean fake news. It means {check_count} of {len(source_day_articles)} home-feed articles "
-                f"were marked Check and should be manually verified before trusting them fully. "
-                f"Alert threshold: {suspicious_threshold} Check/Fake labels or at least 3 Fake labels."
-            )
-        else:
-            suspicious_title = f"Some articles were marked Fake or Check for {selected_date_lower}"
-            suspicious_detail = (
-                f"{suspicious_count} of {len(source_day_articles)} home-feed articles were labeled "
-                f"Fake/Check ({fake_count} Fake, {check_count} Check). "
-                f"Check means manual verification is needed. Alert threshold: {suspicious_threshold} Check/Fake labels "
-                f"or at least 3 Fake labels."
-            )
-        active_alerts.append({
-            "level": "warning",
-            "title": suspicious_title,
-            "detail": suspicious_detail,
-            "time": now_local().strftime("%I:%M %p")
-        })
-
-    try:
-        db_status = "Healthy"
-        _ = get_all_users()
-    except Exception:
-        db_status = "Issue"
-
-    system_health_items = [
-        {"label": "NewsAPI Status", "status": "Operational" if API_KEY and API_KEY != "your_real_newsapi_key_here" else "Needs Setup", "meta": "Primary live article provider"},
-        {"label": "RSS Feed Status", "status": "Operational" if SOURCE_FEED_MAP else "Check", "meta": f"{len(SOURCE_FEED_MAP)} source feeds configured"},
-        {"label": "Last Successful Refresh", "status": now_local().strftime("%I:%M %p"), "meta": "Latest admin refresh time"},
-        {"label": f"Articles Fetched For {selected_date_title}", "status": str(len(source_day_articles)), "meta": f"Home feed article count for {selected_date_textual}"},
-        {
-            "label": "Failed Source Fetch Count",
-            "status": str(failed_source_fetch_count),
-            "meta": (
-                f"No headlines for {selected_date_lower}: {failed_source_names_text}"
-                if failed_source_fetch_count and failed_source_names_text
-                else (
-                    f"All trusted sources returned news. Latest-only fallback used for: {latest_only_names_text}"
-                    if latest_only_names_text
-                    else "All trusted sources returned at least one article."
-                )
-            )
-        },
-        {"label": "Database Status", "status": db_status, "meta": "User and activity storage"},
-    ]
-
-    summary_cards = [
-        {"title": "Total Users", "value": len(users), "accent": "#4da3ff", "subtext": "Registered non-admin accounts"},
-        {"title": f"Active Users {selected_date_title}", "value": active_users_today, "accent": "#1fd28a", "subtext": f"Unique users active on {selected_date_lower}"},
-        {"title": f"Total Searches {selected_date_title}", "value": total_searches_today, "accent": "#00c2a8", "subtext": f"Search actions recorded on {selected_date_lower}"},
-        {"title": f"Total Reading Time {selected_date_title}", "value": format_seconds_compact(total_reading_seconds_today), "accent": "#ffb020", "subtext": f"User time spent in app on {selected_date_lower}"},
-        {"title": f"Saved Articles {selected_date_title}", "value": sum(saved_counts.values()), "accent": "#ff6b9c", "subtext": f"Articles saved by users on {selected_date_lower}"},
-        {"title": f"Articles Fetched {selected_date_title}", "value": len(source_day_articles), "accent": "#36cfc9", "subtext": f"Articles available for {selected_date_lower}"},
-        {"title": "Active Alerts", "value": len(active_alerts), "accent": "#ff6b6b", "subtext": "Alerts needing attention"},
-        {"title": "System Health", "value": "Healthy" if not active_alerts else "Monitor", "accent": "#2ecc71", "subtext": "Overall platform status"},
-    ]
-
-    user_rows = []
-    dataset_rows = []
-    for user in users:
-        email_key = safe_text(user["email"]).strip().lower()
-        display_email = safe_text(user["original_email"] if "original_email" in user.keys() and user["original_email"] else user["email"]).strip().lower()
-        active_status = int(user["is_active"] if "is_active" in user.keys() else 1)
-        per_user_activity = [r for r in view_activity_rows if safe_text(r["user_email"]).strip().lower() == email_key]
-        per_user_searches = sum(1 for r in per_user_activity if safe_text(r["event_type"]) == "search")
-        per_user_logins = sum(1 for r in per_user_activity if safe_text(r["event_type"]) == "login")
-        per_user_logouts = sum(1 for r in per_user_activity if safe_text(r["event_type"]) == "logout")
-        per_user_reading_seconds = 0
-        per_user_category_counter = Counter()
-        for row in per_user_activity:
-            event_type = safe_text(row["event_type"])
-            details = safe_text(row["details"])
-            if event_type == "reading_time":
-                try:
-                    per_user_reading_seconds += int(extract_detail_value(details, "seconds") or "0")
-                except Exception:
-                    pass
-            if event_type == "category_view":
-                cat = details.replace("Opened category:", "").strip().title()
-            elif event_type == "article_click":
-                cat = extract_detail_value(details, "category").strip().title()
-            else:
-                cat = ""
-            if cat:
-                per_user_category_counter[cat] += 1
-        user_rows.append({
-            "name": user["name"],
-            "email": display_email,
-            "last_login_at": user["last_login_at"] or "Not yet",
-            "search_count": per_user_searches,
-            "saved_count": int(saved_counts.get(email_key, 0)),
-            "reading_time": format_seconds_compact(per_user_reading_seconds) if per_user_reading_seconds else "-",
-            "most_used_category": per_user_category_counter.most_common(1)[0][0] if per_user_category_counter else "-",
-            "engagement_score": (per_user_searches * 2) + int(saved_counts.get(email_key, 0)) + (per_user_reading_seconds // 60),
-        })
-        dataset_rows.append({
-            "name": user["name"],
-            "email": display_email,
-            "role": "User" if active_status else "Inactive",
-            "last_login_at": user["last_login_at"] or "Not yet",
-            "login_count": per_user_logins,
-            "logout_count": per_user_logouts,
-            "search_count": per_user_searches,
-            "saved_count": int(saved_counts.get(email_key, 0)),
-            "password_status": "Protected",
-            "password_updated_at": user["password_updated_at"] or user["created_at"] or "Not available",
-            "created_at": user["created_at"] or "Not available",
-            "status": "Active" if active_status else "Inactive",
-        })
-    user_rows = sorted(user_rows, key=lambda x: x["engagement_score"], reverse=True)
-    dataset_rows = sorted(dataset_rows, key=lambda x: (x["status"] == "Active", x["login_count"]), reverse=True)
-
-    return render_template(
-        "admin.html",
-        admin_user=admin_user,
-        selected_date=selected_date_text,
-        max_date=today.strftime("%Y-%m-%d"),
-        summary_cards=summary_cards,
-        reading_trend_labels=daily_labels,
-        reading_trend_values=reading_trend_values,
-        active_user_trend_labels=daily_labels,
-        active_user_trend_values=active_user_trend_values,
-        top_search_labels=top_search_labels,
-        top_search_values=top_search_values,
-        category_chart_labels=category_chart_labels,
-        category_chart_values=category_chart_values,
-        most_viewed_articles=most_viewed_articles,
-        most_saved_articles=most_saved_articles,
-        timeline_rows=timeline_rows,
-        system_health_items=system_health_items,
-        active_alerts=active_alerts,
-        engaged_users=user_rows,
-        dataset_rows=dataset_rows,
-        view_date_text=selected_date_textual,
-        selected_date_title=selected_date_title,
-        selected_date_lower=selected_date_lower,
-        most_used_source=most_used_source_counter.most_common(1)[0][0] if most_used_source_counter else "-",
-    )
-
-@app.route("/admin/open-app")
-@admin_required
-def admin_open_app():
-    session["admin_app_mode"] = True
-    return redirect("/")
-
-@app.route("/admin/back")
-@admin_required
-def admin_back_to_dashboard():
-    session["admin_app_mode"] = False
-    return redirect("/admin")
+register_auth_routes(app, globals())
+register_admin_routes(app, globals())
 
 @app.route("/")
 def home():
     if request.args.get("reset") == "1":
-        session.pop("last_search_topic", None)
-        session["selected_country"] = "WORLD"
-        session["selected_source"] = ""
-        session["typed_country"] = ""
-        CACHE.clear()
+        reset_news_filters(clear_search=True)
     selected_date = request.args.get("date", "").strip() or None
     log_user_event("page_view", "Visited home dashboard")
-    data = build_dashboard(mode="home", selected_date=selected_date)
-    return render_template("dashboard.html", **data)
+    return render_dashboard_page(mode="home", selected_date=selected_date)
 
 @app.route("/category/<cat>")
 def category(cat):
     selected_date = request.args.get("date", "").strip() or None
 
-    allowed = {
-        "technology", "business", "health", "sports",
-        "politics", "entertainment", "disaster", "climate"
-    }
-
     cat = (cat or "").strip().lower()
-    if cat not in allowed:
+    if cat not in CATEGORY_ALLOWLIST:
         cat = "technology"
 
     track_category_click(cat.capitalize())
     log_user_event("category_view", f"Opened category: {cat}")
-    data = build_dashboard(mode="category", category=cat, selected_date=selected_date)
-    return render_template("dashboard.html", **data)
+    return render_dashboard_page(mode="category", category=cat, selected_date=selected_date)
 
 @app.route("/search", methods=["GET", "POST"])
 def search():
@@ -4969,9 +3722,7 @@ def search():
     session["last_search_topic"] = topic
     track_search_term(topic)
     log_user_event("search", f"Searched topic: {topic}")
-
-    data = build_dashboard(mode="search", query=topic, selected_date=selected_date)
-    return render_template("dashboard.html", **data)
+    return render_dashboard_page(mode="search", query=topic, selected_date=selected_date)
 
 @app.route("/set_date", methods=["POST"])
 def set_date():
@@ -5045,16 +3796,8 @@ def toggle_save():
     except Exception:
         score_val = 0.0
 
-    saved_at = datetime.now().strftime("%d-%m-%Y %I:%M %p")
-
-    if is_saved(link, uid):
-        delete_saved_by_link(link, uid)
-        log_user_event("save_remove", f"Removed saved article: {title or link}")
-        return jsonify({"ok": True, "saved": False}), 200
-
-    save_article(uid, title or "No title", link, label or "Real", score_val, saved_at)
-    log_user_event("save_add", f"Saved article: {title or link}")
-    return jsonify({"ok": True, "saved": True}), 200
+    saved = set_article_saved_state(uid, title, link, label=label, score=score_val)
+    return jsonify({"ok": True, "saved": saved}), 200
 
 @app.route("/saved")
 def saved():
@@ -5080,9 +3823,7 @@ def latest_saved_json():
 
 @app.route("/reset_filters", methods=["POST"])
 def reset_filters():
-    session["selected_country"] = "WORLD"
-    session["selected_source"] = ""
-    session["typed_country"] = ""
+    reset_news_filters()
     return jsonify({"ok": True})
 
 @app.route("/refresh_news_json")
@@ -5144,6 +3885,7 @@ def trusted_sources():
     selected_date = request.args.get("date", "").strip() or None
     context = build_base_context(active="home", selected_date=selected_date)
     context["source_showcase"] = SOURCE_SHOWCASE
+    context["trusted_sections"] = []
     context["today_text"] = (parse_selected_date(selected_date) or today_local_date()).strftime("%A, %d %B %Y")
     return render_template("trusted_sources.html", **context)
 
@@ -5210,26 +3952,24 @@ def save_article_api():
 
     title = data.get("title")
     link = data.get("link")
-    summary = data.get("summary")
     label = data.get("label")
 
     if not link:
         return jsonify({"status": "error"}), 400
 
     # ✅ Use your EXISTING DB function
-    if is_saved(link, uid):
-        delete_saved_by_link(link, uid)
-        log_user_event("save_remove", f"Removed saved article: {title or link}")
-        return jsonify({"status": "removed"})
-
-    save_article(uid, title or "No Title", link, label or "Real", 0.8, datetime.now().strftime("%d-%m-%Y %I:%M %p"))
-    log_user_event("save_add", f"Saved article: {title or link}")
-
-    return jsonify({"status": "saved"})
+    saved = set_article_saved_state(
+        uid,
+        title or "No Title",
+        link,
+        label=label,
+        score=0.8,
+        saved_at=datetime.now().strftime(TIMESTAMP_FORMAT)
+    )
+    return jsonify({"status": "saved" if saved else "removed"})
 
 @app.route("/dismiss_breaking", methods=["POST"])
 def dismiss_breaking():
-    session["dismiss_breaking"] = True
     return jsonify({"ok": True})
 
 if __name__ == "__main__":
